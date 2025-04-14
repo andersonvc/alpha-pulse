@@ -180,14 +180,15 @@ async def run_workflow(ticker: str, limit: int = 3) -> Edgar8kState:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     from alpha_pulse.graphs.edgar_8k_graph import create_edgar_8k_app
+    import pprint
     async def main():
         
-        ticker = "TRNR"
+        ticker = "SPGI"
         
         ## Run the parser
         final_state: Edgar8kState = await run_workflow(ticker, limit=1)
         for filing in final_state.filingEntries:
-            print(filing.parsed_8k)
+            pprint.pprint(filing.parsed_8k)
 
     
     # Run the async main function
