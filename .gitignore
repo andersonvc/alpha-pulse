@@ -11,3 +11,16 @@ wheels/
 .venv
 .env
 
+# Generated files and temporary files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+

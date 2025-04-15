@@ -8,4 +8,4 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 # Run the Python script using uv
-uv run python src/alpha_pulse/agents/edgar/agent_8k_parser.py "$@" 
+uv run python src/alpha_pulse/graphs/edgar_8k_graph.py "$@" 

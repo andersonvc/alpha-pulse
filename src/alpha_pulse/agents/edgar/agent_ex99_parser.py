@@ -1,20 +1,11 @@
 """Agent for parsing x99 supplemental text."""
-import json
-from typing import Dict, List, Optional
 import logging
-from pydantic import BaseModel, Field
 
-from langchain.agents import AgentExecutor, create_openai_functions_agent
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.tools import BaseTool
-from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, END, START
-from langchain.tools import tool
+from langchain.prompts import ChatPromptTemplate
 
 from alpha_pulse.types.edgar import Edgar8kFilingData
 from alpha_pulse.types.state import Edgar8kState
-import asyncio
+from alpha_pulse.agents.base_agent import BaseAgent
 
 
 system_prompt = """
@@ -24,7 +15,7 @@ system_prompt = """
 """
 
 
-class AgentEX99Parser:
+class AgentEX99Parser(BaseAgent[Edgar8kState]):
     """Agent for parsing ex99 supplemental text.
     
     This agent processes each filing entry in the state and extracts the
@@ -37,58 +28,39 @@ class AgentEX99Parser:
         Args:
             model_name: Name of the OpenAI model to use
         """
-        self.model = ChatOpenAI(model=model_name, temperature=0)
+        super().__init__(model_name)
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             ("user", "Text: {raw_text}")
         ])
     
-    async def __call__(self, state: Edgar8kState) -> Edgar8kState:
-        """Process each filing entry and extract item sections.
-        
-        Args:
-            state: Current state containing filing entries
-            
-        Returns:
-            Edgar8kState: Updated state with parsed items
-        """
-        logging.info(f"Processing {len(state.filingEntries)} filings")
-        
-        # Process all filings concurrently
-        tasks = [
-            self._extract_items(filing.raw_ex99_texts)
-            for filing in state.filingEntries
-            if filing.raw_ex99_texts
-        ]
-        
-        # Wait for all tasks to complete
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Update filings with results
-        for filing, result in zip(state.filingEntries, results):
-            if isinstance(result, Exception):
-                logging.error(f"Error processing filing: {str(result)}")
-                continue
-            filing.parsed_ex99 = result
-        
-        return state
+    def _get_prompt(self) -> str:
+        """Get the system prompt for the agent."""
+        return system_prompt
     
-    async def _extract_items(self, raw_text: str) -> str:
+    def _get_items_from_state(self, state: Edgar8kState) -> list:
+        """Get the filing entries from the state."""
+        return state.filingEntries or []
+    
+    def _should_process_item(self, item: Edgar8kFilingData) -> bool:
+        """Determine if a filing should be processed."""
+        return item.raw_ex99_texts is not None
+    
+    async def _process_item(self, filing: Edgar8kFilingData) -> str:
         """Extract specified items from raw text using an LLM.
         
         Args:
-            raw_text: The raw text of the ex99 supplemental text
+            filing: The filing to process
             
         Returns:
             str: The formatted text
         """
-
         # Create the chain
         chain = self.prompt | self.model
         
         # Get the response
         response = await chain.ainvoke({
-            "raw_text": raw_text,
+            "raw_text": filing.raw_ex99_texts
         })
 
         try: 
@@ -96,3 +68,21 @@ class AgentEX99Parser:
         except Exception as e:
             logging.error(f"Error parsing LLM response: {str(e)}")
             return ''
+    
+    def _update_state_with_results(self, state: Edgar8kState, items: list, results: list) -> Edgar8kState:
+        """Update the state with the processing results.
+        
+        Args:
+            state: The current state
+            items: The original filings
+            results: The processing results
+            
+        Returns:
+            Edgar8kState: The updated state
+        """
+        for filing, result in zip(items, results):
+            if isinstance(result, Exception):
+                logging.error(f"Error processing filing: {str(result)}")
+                continue
+            filing.parsed_ex99 = result
+        return state
