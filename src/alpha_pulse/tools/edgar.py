@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from alpha_pulse.types.edgar import Edgar8kFilingData
+from alpha_pulse.tools.edgar_utils import parse_atom_latest_filings_feed, filter_8k_feed_by_items, extract_8k_url_from_base_url
 
 from langchain.tools import tool
 
@@ -99,6 +100,30 @@ class EdgarAPI:
     def __init__(self) -> None:
         """Initialize the EdgarAPI with a SECClient instance."""
         self.client = SECClient()
+    
+    async def get_latest_filings(self, limit: int = 40, filing_type: str = '8-K') -> List[str]:
+        """Retrieves the latest filings from the SEC.
+        
+        Args:
+            limit: Maximum number of filings to return (default: 40)
+            filing_type: Type of filing to retrieve (default: '8-K')
+        """
+        headers = {
+            'User-Agent': os.getenv("USER_AGENT"),
+            'Accept-Encoding': 'gzip, deflate',
+        }
+        url = f"{self.client.base_url}/cgi-bin/browse-edgar?company=&CIK=&type={filing_type}&owner=include&count={limit}&action=getcurrent&output=atom"
+        resp: str = await self.client._make_request(url, headers)
+        df = parse_atom_latest_filings_feed(resp)
+        filtered_df = filter_8k_feed_by_items(df)
+
+        async def get_8k_url(x)->str:
+            html = await self.client._make_request(x, headers)
+            return extract_8k_url_from_base_url(html)
+        
+        filtered_df['url_8k'] = await asyncio.gather(*[get_8k_url(x) for x in filtered_df['base_url']])
+        return filtered_df
+
 
     async def get_cik_from_ticker(self, ticker: str) -> Optional[str]:
         """Retrieves the Central Index Key (CIK) for a given stock ticker symbol.
@@ -289,6 +314,5 @@ async def parse_latest_8k_filing_tool(ticker: str, limit: int = 3) -> List[Edgar
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    res = asyncio.run(EdgarAPI().retrieve_8k_filings("AAPL"))
-    for entry in res:
-        print(entry.raw_ex99_texts)
+    df = asyncio.run(EdgarAPI().get_latest_filings())
+    print(df.head())
