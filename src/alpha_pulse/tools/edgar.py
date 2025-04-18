@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
+import time
+from threading import Lock
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -13,8 +15,10 @@ from pydantic import BaseModel, Field
 
 from alpha_pulse.types.edgar import Edgar8kFilingData
 from alpha_pulse.tools.edgar_utils import parse_atom_latest_filings_feed, filter_8k_feed_by_items, extract_8k_url_from_base_url
-
+from alpha_pulse.types.simple8k import SimpleState8K
 from langchain.tools import tool
+from alpha_pulse.agents.edgar.simple_8k_parser import Simple8KParser
+from alpha_pulse.graphs.simple8k_graph import run_workflow
 
 
 # Constants
@@ -24,6 +28,48 @@ SEC_HEADERS = {
     "User-Agent": os.getenv("USER_AGENT"),
     "Accept-Encoding": "gzip, deflate",
 }
+# SEC rate limits: 10 requests per second, but with a more conservative approach
+SEC_RATE_LIMIT = 0.2  # 5 requests per second
+SEC_BURST_LIMIT = 10  # Maximum number of requests in a burst
+SEC_BURST_WINDOW = 1.0  # Time window for burst limit in seconds
+
+
+class RateLimiter:
+    """Thread-safe rate limiter for SEC requests."""
+    _instance = None
+    _lock = Lock()
+    
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance.last_request_time = 0.0
+                cls._instance.request_times = []
+        return cls._instance
+    
+    async def wait(self):
+        """Wait if necessary to respect rate limits."""
+        now = time.time()
+        
+        # Clean up old request times
+        self.request_times = [t for t in self.request_times if now - t < SEC_BURST_WINDOW]
+        
+        # Check burst limit
+        if len(self.request_times) >= SEC_BURST_LIMIT:
+            # Wait until the oldest request falls outside the window
+            wait_time = self.request_times[0] + SEC_BURST_WINDOW - now
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self.request_times = self.request_times[1:]
+        
+        # Check rate limit
+        elapsed = now - self.last_request_time
+        if elapsed < SEC_RATE_LIMIT:
+            await asyncio.sleep(SEC_RATE_LIMIT - elapsed)
+        
+        # Update tracking
+        self.last_request_time = time.time()
+        self.request_times.append(self.last_request_time)
 
 
 class Edgar8kFilingInput(BaseModel):
@@ -47,6 +93,7 @@ class SECClient:
     base_url: str = SEC_BASE_URL
     api_base_url: str = SEC_API_BASE_URL
     headers: Dict[str, str] = field(default_factory=lambda: SEC_HEADERS.copy())
+    rate_limiter: RateLimiter = field(default_factory=RateLimiter)
 
     async def _make_request(self, url: str, headers: Optional[Dict[str, str]] = None) -> str:
         """Make an async request to the SEC API with proper headers.
@@ -61,6 +108,7 @@ class SECClient:
         Raises:
             aiohttp.ClientError: If the request fails
         """
+        await self.rate_limiter.wait()
         headers = headers or self.headers
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
@@ -81,6 +129,7 @@ class SECClient:
             aiohttp.ClientError: If the request fails
             ValueError: If the response is not valid JSON
         """
+        await self.rate_limiter.wait()
         headers = headers or self.headers
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
@@ -121,7 +170,13 @@ class EdgarAPI:
             html = await self.client._make_request(x, headers)
             return extract_8k_url_from_base_url(html)
         
+        async def get_url_text(url:str)->str:
+            html = await self.client._make_request(url, headers)
+            soup = BeautifulSoup(html, 'html.parser')
+            return soup.get_text()
+        
         filtered_df['url_8k'] = await asyncio.gather(*[get_8k_url(x) for x in filtered_df['base_url']])
+        filtered_df['url_text'] = await asyncio.gather(*[get_url_text(x) for x in filtered_df['url_8k']])
         return filtered_df
 
 
@@ -315,4 +370,22 @@ async def parse_latest_8k_filing_tool(ticker: str, limit: int = 3) -> List[Edgar
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     df = asyncio.run(EdgarAPI().get_latest_filings())
+    df = df[df['filtered_items']=='8.01']
     print(df.head())
+    #print(df['url_text'][0])
+
+    # Convert first row in dataframe to SimpleState8K class
+    row = df.iloc[1]
+    state = SimpleState8K(
+        raw_text=row['url_text'],
+        items=row['filtered_items'],
+        parsed_items={},
+        )
+    #print(state)
+
+    # Invoke workflow
+    result: SimpleState8K = asyncio.run(run_workflow(state))
+
+
+    for k,v in result.parsed_items['8.01']:
+        print(k,v)
