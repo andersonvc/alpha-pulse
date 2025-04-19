@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 import time
 from threading import Lock
 
+import pandas as pd
 import aiohttp
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
@@ -19,6 +20,7 @@ from alpha_pulse.types.simple8k import SimpleState8K
 from langchain.tools import tool
 from alpha_pulse.agents.edgar.simple_8k_parser import Simple8KParser
 from alpha_pulse.graphs.simple8k_graph import run_workflow
+from alpha_pulse.types.simple8k import ExtractedUrls
 
 
 # Constants
@@ -166,7 +168,8 @@ class EdgarAPI:
         df = parse_atom_latest_filings_feed(resp)
         filtered_df = filter_8k_feed_by_items(df)
 
-        async def get_8k_url(x)->str:
+
+        async def get_8k_urls(x)->ExtractedUrls:
             html = await self.client._make_request(x, headers)
             return extract_8k_url_from_base_url(html)
         
@@ -175,7 +178,9 @@ class EdgarAPI:
             soup = BeautifulSoup(html, 'html.parser')
             return soup.get_text()
         
-        filtered_df['url_8k'] = await asyncio.gather(*[get_8k_url(x) for x in filtered_df['base_url']])
+        extracted_urls:List[ExtractedUrls] = await asyncio.gather(*[get_8k_urls(x) for x in filtered_df['base_url']])
+        filtered_df[['url_8k', 'url_ex99']] = pd.DataFrame([url.model_dump() for url in extracted_urls])[['url_8k', 'url_ex99']]
+
         filtered_df['url_text'] = await asyncio.gather(*[get_url_text(x) for x in filtered_df['url_8k']])
         return filtered_df
 
@@ -372,20 +377,37 @@ if __name__ == "__main__":
     df = asyncio.run(EdgarAPI().get_latest_filings())
     df = df[df['filtered_items']=='8.01']
     print(df.head())
+    print(df.columns)
     #print(df['url_text'][0])
 
     # Convert first row in dataframe to SimpleState8K class
-    row = df.iloc[1]
+    df.rename(columns={'url_text':'raw_text','date':'filing_date','filtered_items':'items'}, inplace=True)
+    row = df.iloc[0]
     state = SimpleState8K(
-        raw_text=row['url_text'],
-        items=row['filtered_items'],
+        cik=row['cik'],
+        url_8k=row['url_8k'],
+        url_ex99=row['url_ex99'],
+        filing_date=row['filing_date'],
+        raw_text=row['raw_text'],
+        items=row['items'],
         parsed_items={},
-        )
+    )
     #print(state)
+    state = SimpleState8K(**row.to_dict())
 
     # Invoke workflow
     result: SimpleState8K = asyncio.run(run_workflow(state))
+    result = result.model_dump()['parsed_items'].values()
+    result = pd.DataFrame(result)
+    #result = pd.Series(result.model_dump()['parsed_items'].values())
+    #result = pd.DataFrame([result],axis=0)
+    combined_df = pd.concat([result,result,result], axis=0, verify_integrity=False)
+    print(combined_df.columns)
+
+    print(combined_df.head())
+    combined_df.to_parquet('data/output.parquet', index=False)
 
 
-    for k,v in result.parsed_items['8.01']:
-        print(k,v)
+
+    #for k,v in result.parsed_items['8.01']:
+    #    print(k,v)

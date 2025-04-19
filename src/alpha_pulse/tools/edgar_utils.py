@@ -1,6 +1,7 @@
 import pandas as pd
 from bs4 import BeautifulSoup
 import re
+from alpha_pulse.types.simple8k import ExtractedUrls
 
 SEC_BASE_URL = 'https://www.sec.gov'
 
@@ -32,7 +33,7 @@ def filter_8k_feed_by_items(df:pd.DataFrame):
     df['filtered_items'] = df['item_list'].apply(lambda x: ','.join([item for item in x.split(',') if item in allowed_items]))
     return df
 
-def extract_8k_url_from_base_url(response:str)->str:
+def extract_8k_url_from_base_url(response:str)->ExtractedUrls:
     """Extract the 8-K url from the base url response."""
     soup = BeautifulSoup(response, 'html.parser')
 
@@ -40,6 +41,7 @@ def extract_8k_url_from_base_url(response:str)->str:
     rows = soup.find_all('tr')
 
     filing_url = ''
+    ex99_urls = []
     for row in rows:
         cols = row.find_all('td')
         if len(cols) >= 4:
@@ -48,12 +50,16 @@ def extract_8k_url_from_base_url(response:str)->str:
                 link_tag = cols[2].find('a')
                 href = link_tag['href'] if link_tag and 'href' in link_tag.attrs else None
                 filing_url = SEC_BASE_URL + href.replace('ix?doc=', '')
-                break
+            elif 'ex-99' in file_type.lower():
+                link_tag = cols[2].find('a')
+                href = link_tag['href'] if link_tag and 'href' in link_tag.attrs else None
+                ex99_urls.append(SEC_BASE_URL + href.replace('ix?doc=', ''))
 
     if not filing_url:
         raise ValueError(f"Could not find 8-K text link in from base url.")
-
-    return filing_url
+    
+    ex99_urls = ','.join(ex99_urls)
+    return ExtractedUrls(url_8k=filing_url, url_ex99=ex99_urls)
 
 
 def parse_atom_latest_filings_feed(response:str):

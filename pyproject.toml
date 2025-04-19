@@ -21,6 +21,7 @@ dependencies = [
     "pandas>=2.2.3",
     "polygon-api-client>=1.14.4",
     "prettyprint>=0.1.5",
+    "pyarrow>=19.0.1",
     "pydantic>=2.11.3",
     "python-dotenv>=1.1.0",
 ]

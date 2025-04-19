@@ -12,41 +12,47 @@ from alpha_pulse.agents.base_agent import BaseAgent
 
 
 SYSTEM_PROMPT = """
-You are an expert in financial disclosures. Analyze the following text from an SEC 8-K filing under Item 8.01: "Other Events".
+You are an expert in U.S. SEC financial disclosures.
 
-Based on the disclosure, extract and answer the questions into the following fields. Your answers must be accurate and concise. Return only the values requested, no explanations.
+Analyze the Item 8.01 ("Other Events") section below and provide a structured analysis.
+Return a structured response with the following fields:
 
-Text:
-\"\"\"{parsed_text}\"\"\"
+<content>
+{parsed_text}
+</content>
 
-Return a result in a structured format with the following fields:
+Required Fields:
+1. Event Classification:
+   - event_type: Choose one from: M&A, Dividend, Stock Split, Share Repurchase, Earnings Update, Financial Guidance, Restatement, Legal Action, Regulatory Update, Settlement, Compliance Notice, Product Launch, Product Recall, Cybersecurity Incident, Operational Disruption, Plant Closure, Leadership Commentary, Governance Update, Joint Venture, Market Entry/Exit, Strategic Restructuring, Investor Communication, Environmental Impact, Public Response, Other
+   - sentiment: Overall financial tone (-1=negative, 0=neutral, 1=positive)
+   - event_summary: A concise summary of the event
+   - key_takeaway: The most important takeaway from the event
 
-# Event Classification
-- event_type (choose from: M&A, Dividend, Stock Split, Share Repurchase, Earnings Update, Financial Guidance, Restatement, Legal Action, Regulatory Update, Settlement, Compliance Notice, Product Launch, Product Recall, Cybersecurity Incident, Operational Disruption, Plant Closure, Leadership Commentary, Governance Update, Joint Venture, Market Entry/Exit, Strategic Restructuring, Investor Communication, Environmental Impact, Public Response, Other)
-- sentiment (what is the overall financial sentiment of the event? choose from: positive, negative, neutral)
-- event_summary (a short summary of the event)
-- most_relevant_takeaway (a short summary of the most relevant takeaway from the event)
-- stock_price_impact (will event impact stock price? true/false)
-- stock_price_impact_reasoning (explain the reasoning behind the expected impact)
+2. Impact Analysis:
+   - probable_price_move: Will this event likely impact the stock price? (true/false)
+   - price_move_reason: Reasoning for the expected price impact
+   - is_financially_material: Does this materially affect financial statements? (true/false)
+   - is_operational_impact: Does this affect operations? (true/false)
+   - is_related_to_prior: Is this related to prior disclosures? (true/false)
 
-# Materiality Assessment
-- is_material (Does this event have a material impact on the company's financial statements? true/false)
-- is_related_to_prior (Does this event relate to prior disclosures? true/false)
+3. Timing and Context:
+   - is_recent_event: Did this occur within 30 days of filing? (true/false)
+   - unexpected_timing: Was this disclosed outside normal cadence? (true/false)
 
-# Impact Analysis
-- is_financial_impact (Does this event have a financial impact? true/false)
-- is_operational_impact (Does this event have an operational impact? true/false)
-- is_market_reaction_expected (Is a market reaction expected? true/false)
+4. Strategic Context:
+   - mentioned_companies: Comma-separated list of legal entity names (no tickers)
+   - mentioned_tickers: Comma-separated list of tickers
+   - keywords: Up to 10 relevant terms, lowercase, comma-separated
+   - strategic_signal: Does this signal strategic change? (true/false)
+   - priority_shift_detected: Have company priorities shifted? (true/false)
 
-# Timing and Context
-- is_recent_event (Is this event recent? true/false)
-- unexpected_timing (Is the timing of this event unexpected? true/false)
-
-# Strategic Context
-- list_of_mentioned_companies (commas separated list of company names mentioned in the event)
-- list_of_keywords (commas separated list of relevant keywords from the event)
-- strategic_signal (Is this event a strategic signal? true/false)
-- priority_shift (Has the company's priority shifted? true/false)
+Guidelines:
+- Be precise and factual in your analysis
+- Use lowercase true/false for boolean fields
+- For sentiment, use -1, 0, or 1
+- Keep summaries and takeaways concise but informative
+- List companies and keywords without duplicates
+- Do not include any additional text or explanations
 """
 
 
@@ -59,7 +65,7 @@ class Simple8KAnalyzer_801:
     
     def __init__(self):
         """Initialize the parser with model and prompt."""
-        self.model = ChatOpenAI(model="gpt-4o", temperature=0).with_structured_output(Simple8KItem_801)
+        self.model = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Simple8KItem_801)
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_PROMPT),
             ("human", "Parsed text: {parsed_text}")
@@ -70,11 +76,18 @@ class Simple8KAnalyzer_801:
         """Process the state using the agent."""
         chain = self.prompt | self.model
 
-        parsed_text = state.parsed_items["8.01"].parsed_text
-        result: Simple8KItem_801 = await chain.ainvoke({
-            "parsed_text": parsed_text
-        })
-        result.parsed_text = parsed_text
-        state.parsed_items["8.01"] = result
+        if '8.01' in state.parsed_items:
+            parsed_text = state.parsed_items["8.01"].parsed_text
+            result: Simple8KItem_801 = await chain.ainvoke({
+                "parsed_text": parsed_text
+            })
+            result.item_number = "8.01"
+
+            result.cik = state.cik
+            result.ex99_urls = state.url_ex99
+            result.filing_date = state.filing_date
+            result.url_8k = state.url_8k
+            result.parsed_text = parsed_text
+            state.parsed_items["8.01"] = result
 
         return state
