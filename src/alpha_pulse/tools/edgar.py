@@ -21,7 +21,7 @@ from langchain.tools import tool
 from alpha_pulse.agents.edgar.simple_8k_parser import Simple8KParser
 from alpha_pulse.graphs.simple8k_graph import run_workflow
 from alpha_pulse.types.simple8k import ExtractedUrls
-
+from alpha_pulse.db import DuckDBManager
 
 # Constants
 SEC_BASE_URL = "https://www.sec.gov"
@@ -374,8 +374,46 @@ async def parse_latest_8k_filing_tool(ticker: str, limit: int = 3) -> List[Edgar
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    
+
+    import duckdb
+
+    con = duckdb.connect('data/alpha_pulse.db')
+
+    # Look for an index that includes all 3 key columns
+    def check_index_exists(con, table_name: str, columns: list[str]) -> bool:
+
+        # Format the values as string literals
+        cik = f"'{columns[0]}'"
+        filing_date = f"'{columns[1]}'"
+        item_number = f"'{columns[2]}'"
+        
+        query = f'''
+            SELECT 1
+            FROM {table_name}
+            WHERE cik = {cik} 
+            AND filing_date = {filing_date} 
+            AND item_number = {item_number}
+            LIMIT 1
+        '''
+        result = con.execute(query).fetchone()
+        return result is not None
+
+    # Test with the actual columns we want to check
+    print(check_index_exists(con, 'simple8k_items_801', ['0001948056', '2025-04-21', '8.01']))
+    
+
+
+
+
+
+
+    """
     df = asyncio.run(EdgarAPI().get_latest_filings())
     df = df[df['filtered_items']=='8.01']
+    
+
+
     print(df.head())
     print(df.columns)
     #print(df['url_text'][0])
@@ -397,17 +435,57 @@ if __name__ == "__main__":
 
     # Invoke workflow
     result: SimpleState8K = asyncio.run(run_workflow(state))
-    result = result.model_dump()['parsed_items'].values()
-    result = pd.DataFrame(result)
-    #result = pd.Series(result.model_dump()['parsed_items'].values())
-    #result = pd.DataFrame([result],axis=0)
-    combined_df = pd.concat([result,result,result], axis=0, verify_integrity=False)
-    print(combined_df.columns)
+    
+    # Create DataFrame from parsed items
+    result_df = []
+    for v in result.parsed_items.values():
+        result_df.append(v.model_dump())
+    result_df = pd.DataFrame(result_df)
+    print(f"Result DataFrame shape: {result_df.shape}")
+    print(f"Result DataFrame columns: {result_df.columns.tolist()}")
+    
+    # Initialize database manager and insert data
+    db_manager = DuckDBManager(db_path="data/alpha_pulse.db")
+    print(f"Database path: {db_manager.db_path}")
+    
+    # Insert the DataFrame
+    db_manager.insert_simple8k_items(result_df)
+    
+    # Verify the insertion
+    exists, count = db_manager.check_table_exists_and_has_records("simple8k_items_801")
+    print(f"Table exists: {exists}")
+    print(f"Record count: {count}")
+    """
 
-    print(combined_df.head())
-    combined_df.to_parquet('data/output.parquet', index=False)
-
-
+    # Get all items and verify
+    db_manager = DuckDBManager(db_path="data/alpha_pulse.db")
+    df = db_manager.get_all_simple8k_items()
+    print(f"Retrieved DataFrame shape: {df.shape}")
+    print(f"Retrieved DataFrame columns: {df.columns.tolist()}")
+    print("\nFirst few records:")
+    print(df.head())
 
     #for k,v in result.parsed_items['8.01']:
     #    print(k,v)
+    
+    db_manager = DuckDBManager(db_path="data/alpha_pulse.db")
+    print(f"Database path: {db_manager.db_path}")
+    
+    # Check if table exists and has records
+    exists, count = db_manager.check_table_exists_and_has_records("simple8k_items_801")
+    print(f"Table exists: {exists}")
+    print(f"Record count: {count}")
+    
+    # Get all items
+    df = db_manager.get_all_simple8k_items()
+    print(f"DataFrame shape: {df.shape}")
+    print(f"DataFrame columns: {df.columns.tolist()}")
+    print(df.head())
+    print('aaa')
+    print(df['cik'][0])
+    print(df['filing_date'][0])
+    print(df['item_number'][0])
+
+    print('bbb') 
+    
+    

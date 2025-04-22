@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.11.16",
     "beautifulsoup4>=4.13.3",
+    "duckdb>=1.2.2",
     "graphviz>=0.20.3",
     "ipython>=9.1.0",
     "langchain>=0.3.23",
