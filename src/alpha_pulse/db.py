@@ -236,4 +236,16 @@ class DuckDBManager:
         
         return True, count
 
+    def get_all_filings(self) -> pd.DataFrame:
+        """Get all filings from the database.
+        
+        Returns:
+            DataFrame containing all filings with their parsed items
+        """
+        return self.conn.execute("""
+            SELECT DISTINCT cik, filing_date, item_number, event_type, event_summary, sentiment
+            FROM simple8k_items_801
+            ORDER BY filing_date DESC, cik
+        """).df()
+
 db_manager = DuckDBManager(db_path="data/alpha_pulse.db") 
