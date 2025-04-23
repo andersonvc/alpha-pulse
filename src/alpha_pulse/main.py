@@ -1,18 +1,17 @@
 import asyncio
 import logging
-#from alpha_pulse.agents.edgar_8k_agent import Edgar8kAgent
-#from alpha_pulse.agents.edgar.agent_8k_parser import create_8k_parser_graph
+
 from alpha_pulse.tools.edgar import EdgarAPI
 from alpha_pulse.db import DuckDBManager
 import pandas as pd
-from alpha_pulse.types.simple8k import SimpleState8K
-from alpha_pulse.graphs.simple8k_graph import run_workflow
+from alpha_pulse.types.edgar8k import State8K
+from alpha_pulse.graphs.edgar_8k_workflow import run_workflow
 
 async def check_record_exists(db_manager: DuckDBManager, cik: str, filing_date: str, item_number: str) -> bool:
     """Check if a record exists in the database."""
     query = f'''
         SELECT 1
-        FROM simple8k_items_801
+        FROM items_8k_801
         WHERE cik = '{cik}' 
         AND filing_date = '{filing_date}' 
         AND item_number = '{item_number}'
@@ -24,7 +23,7 @@ async def check_record_exists(db_manager: DuckDBManager, cik: str, filing_date: 
 async def process_new_filings():
     """Process new 8-K filings and store them in the database."""
     # Get latest filings
-    df = await EdgarAPI().get_latest_filings()
+    df = await EdgarAPI().get_latest_filings(limit=20)
 
     df = df.rename(columns={'date': 'filing_date'})
     
@@ -48,8 +47,8 @@ async def process_new_filings():
             print(f"Skipping existing record: {cik} - {filing_date} - {first_item}")
             continue
         
-        # Convert to SimpleState8K
-        state = SimpleState8K(
+        # Convert to State8K
+        state = State8K(
             cik=cik,
             filing_date=filing_date,
             raw_text=raw_text,
@@ -63,7 +62,7 @@ async def process_new_filings():
         result_df = pd.DataFrame([v.model_dump() for v in result.parsed_items.values()])
         
         # Insert into database
-        db_manager.insert_simple8k_items(result_df)
+        db_manager.insert_8k_items(result_df)
         print(f"Inserted new record: {row['cik']} - {row['filing_date']}")
 
 def print_all_filings():

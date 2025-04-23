@@ -5,7 +5,6 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urljoin
 import time
 from threading import Lock
 
@@ -14,14 +13,9 @@ import aiohttp
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
-from alpha_pulse.types.edgar import Edgar8kFilingData
 from alpha_pulse.tools.edgar_utils import parse_atom_latest_filings_feed, filter_8k_feed_by_items, extract_8k_url_from_base_url
-from alpha_pulse.types.simple8k import SimpleState8K
-from langchain.tools import tool
-from alpha_pulse.agents.edgar.simple_8k_parser import Simple8KParser
-from alpha_pulse.graphs.simple8k_graph import run_workflow
-from alpha_pulse.types.simple8k import ExtractedUrls
-from alpha_pulse.db import DuckDBManager
+
+from alpha_pulse.types.edgar8k import ExtractedUrls
 
 # Constants
 SEC_BASE_URL = "https://www.sec.gov"
@@ -95,10 +89,38 @@ class SECClient:
     base_url: str = SEC_BASE_URL
     api_base_url: str = SEC_API_BASE_URL
     headers: Dict[str, str] = field(default_factory=lambda: SEC_HEADERS.copy())
-    rate_limiter: RateLimiter = field(default_factory=RateLimiter)
+    _last_request_time: float = 0.0
+    _min_request_interval: float = 1.0 / 8.0  # 8 requests per second (more conservative)
+    _request_times: List[float] = field(default_factory=list)
+    _burst_window: float = 1.0  # 1 second window
+    _max_burst: int = 8  # Maximum requests in burst window
+
+    async def _wait_for_rate_limit(self):
+        """Wait if necessary to respect rate limits."""
+        now = time.time()
+        
+        # Clean up old request times
+        self._request_times = [t for t in self._request_times if now - t < self._burst_window]
+        
+        # Check burst limit
+        if len(self._request_times) >= self._max_burst:
+            # Wait until the oldest request falls outside the window
+            wait_time = self._request_times[0] + self._burst_window - now
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
+            self._request_times = self._request_times[1:]
+        
+        # Check rate limit
+        elapsed = now - self._last_request_time
+        if elapsed < self._min_request_interval:
+            await asyncio.sleep(self._min_request_interval - elapsed)
+        
+        # Update tracking
+        self._last_request_time = time.time()
+        self._request_times.append(self._last_request_time)
 
     async def _make_request(self, url: str, headers: Optional[Dict[str, str]] = None) -> str:
-        """Make an async request to the SEC API with proper headers.
+        """Make an async request to the SEC API with proper headers and rate limiting.
         
         Args:
             url: URL to request
@@ -110,7 +132,8 @@ class SECClient:
         Raises:
             aiohttp.ClientError: If the request fails
         """
-        await self.rate_limiter.wait()
+        await self._wait_for_rate_limit()
+        
         headers = headers or self.headers
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
@@ -118,7 +141,7 @@ class SECClient:
                 return await response.text()
 
     async def _make_json_request(self, url: str, headers: Optional[Dict[str, str]] = None) -> Dict:
-        """Make an async request to the SEC API and parse JSON response.
+        """Make an async request to the SEC API and parse JSON response with rate limiting.
         
         Args:
             url: URL to request
@@ -131,7 +154,8 @@ class SECClient:
             aiohttp.ClientError: If the request fails
             ValueError: If the response is not valid JSON
         """
-        await self.rate_limiter.wait()
+        await self._wait_for_rate_limit()
+            
         headers = headers or self.headers
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
@@ -204,49 +228,6 @@ class EdgarAPI:
                 return cik
         return None
 
-    async def _get_8k_root_info(self, cik: str, limit: int = 3) -> List[Edgar8kFilingData]:
-        """Retrieves list of the (limit) most recent 8-K root urls 
-           (root-urls are the 'home-page' for all metadata & filing links for a specific 8k).
-        
-        Args:
-            cik: Central Index Key of the company
-            limit: Maximum number of filings to return (default: 3)
-            
-        Returns:
-            Edgar8kFilingUrls: Container with list of filing URLs and metadata
-            
-        Raises:
-            aiohttp.ClientError: If the SEC API request fails
-        """
-        cik_padded = cik.zfill(10)
-        url = f'{self.client.api_base_url}/submissions/CIK{cik_padded}.json'
-        logging.info(f"Retrieving 8-K root urls for ({cik}) from {url}")
-        
-        data = await self.client._make_json_request(url)
-
-        filings = data.get('filings', {}).get('recent', {})
-        accession_numbers = filings.get('accessionNumber', [])
-        filing_dates = filings.get('filingDate', [])
-        form_types = filings.get('form', [])
-        item_types = filings.get('items', [])
-
-        results = []
-        for accession_number, filing_date, form_type, item_type in zip(accession_numbers, filing_dates, form_types, item_types):
-            if form_type == '8-K':
-                accession_number_nodashes = accession_number.replace('-', '')
-                filing_url = f"{self.client.base_url}/Archives/edgar/data/{int(cik)}/{accession_number_nodashes}/{accession_number}-index.htm"
-                results.append(
-                    Edgar8kFilingData(
-                        cik = cik_padded,
-                        filing_date=filing_date,
-                        root_url=filing_url,
-                        item_type=item_type.split(',') if item_type else [],
-                    )
-                )
-                if len(results) >= limit:
-                    break
-
-        return results
 
     async def _get_filing_urls_from_root_url(self, root_url: str) -> Tuple[str, List[str]]:
         """
@@ -310,66 +291,3 @@ class EdgarAPI:
         soup = BeautifulSoup(html, 'html.parser')
         document_text = soup.get_text()
         return document_text
-
-
-    async def retrieve_8k_filings(self, ticker: str='', cik:str='', limit:int=3) -> List[Edgar8kFilingData]:
-        """Parses the latest 8-K filing for a given ticker.
-        
-        Args:
-            ticker: Stock ticker symbol (e.g., 'AAPL' for Apple)
-            
-        Returns:
-            dict: Dictionary with filing sections as keys and their content as values
-            
-        Raises:
-            ValueError: If no CIK is found for the ticker or no 8-K filings exist
-            aiohttp.ClientError: If any HTTP request fails
-        """
-
-        if not cik and not (cik:=await self.get_cik_from_ticker(ticker)):
-            raise ValueError(f"No CIK found for ticker: {ticker}")
-        
-        root_info:List[Edgar8kFilingData] = await self._get_8k_root_info(cik, limit)
-        if not root_info:
-            raise ValueError(f"No 8-K filings found for ({ticker},{cik})")
-        
-        # Process all entries in parallel
-        async def process_entry(entry: Edgar8kFilingData) -> Edgar8kFilingData:
-            filing_url, ex99_urls = await self._get_filing_urls_from_root_url(entry.root_url)
-            entry.filing_url = filing_url
-            entry.ex99_urls = ex99_urls
-            entry.raw_text = await self._load_raw_text(filing_url)
-            entry.raw_ex99_texts = await asyncio.gather(*[self._load_raw_text(url) for url in ex99_urls])
-            return entry
-
-        # Create tasks for all entries
-        tasks = [process_entry(entry) for entry in root_info]
-        
-        # Wait for all tasks to complete
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Handle any errors and return successful results
-        processed_entries = []
-        for result in results:
-            if isinstance(result, Exception):
-                logging.error(f"Error processing entry: {str(result)}")
-                continue
-            processed_entries.append(result)
-            
-        return processed_entries
-
-
-#@tool("parse_latest_8k_filing", args_schema=Edgar8kFilingInput)
-async def parse_latest_8k_filing_tool(ticker: str, limit: int = 3) -> List[Edgar8kFilingData]:
-    """Parse the latest 8-K filing for a given ticker.
-    
-    Args:
-        ticker: The stock ticker symbol of the company
-        
-    Returns:
-        List[Edgar8kFilingData]: A list of Edgar8kFilingData objects containing the filing text and metadata
-    """
-    return await EdgarAPI().retrieve_8k_filings(ticker, limit=limit)
-
-    
-    

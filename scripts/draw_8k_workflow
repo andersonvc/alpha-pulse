@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Get the directory where the script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Change to project root directory
+cd "$PROJECT_ROOT"
+
+# Run the Python script using uv
+uv run python src/alpha_pulse/graphs/edgar_8k_workflow.py "$@" 

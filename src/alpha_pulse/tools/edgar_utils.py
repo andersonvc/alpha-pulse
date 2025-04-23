@@ -1,7 +1,8 @@
 import pandas as pd
 from bs4 import BeautifulSoup
 import re
-from alpha_pulse.types.simple8k import ExtractedUrls
+from alpha_pulse.types.edgar8k import ExtractedUrls
+
 
 SEC_BASE_URL = 'https://www.sec.gov'
 

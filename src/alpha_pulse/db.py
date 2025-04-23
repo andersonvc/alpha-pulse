@@ -4,9 +4,10 @@ import duckdb
 import pandas as pd
 from pathlib import Path
 from typing import Optional, Union, List, Dict, Any
-import json
 
-from alpha_pulse.types.simple8k import Simple8KItem_801
+
+from alpha_pulse.types.edgar8k import Item8K_801
+
 
 def read_from_duckdb(
     db_path: Union[str, Path],
@@ -65,7 +66,7 @@ class DuckDBManager:
         self.db_path = db_path
         self.conn = duckdb.connect(str(db_path) if db_path else ':memory:')
         # Create tables on initialization
-        self.create_simple8k_tables()
+        self.create_8k_tables()
 
 
     def query(self, sql: str) -> pd.DataFrame:
@@ -89,12 +90,12 @@ class DuckDBManager:
         """
         self.conn.execute(f"COPY {table_name} TO '{output_path}' (FORMAT PARQUET)")
         
-    def create_simple8k_tables(self):
-        """Create tables for storing SimpleState8K records with Simple8KItem_801 items."""
+    def create_8k_tables(self):
+        """Create tables for storing State8K records with Item8K_801 items."""
         
-        # Create table for Simple8KItem_801 items
+        # Create table for Item8K_801 items
         self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS simple8k_items_801 (
+            CREATE TABLE IF NOT EXISTS items_8k_801 (
                 cik TEXT,
                 item_number TEXT,
                 ex99_urls TEXT,
@@ -122,11 +123,11 @@ class DuckDBManager:
         """)
         
                     
-    def insert_simple8k_items(self, items: Union[Dict[str, Simple8KItem_801], pd.DataFrame]):
-        """Insert Simple8KItem_801 items into the database.
+    def insert_8k_items(self, items: Union[Dict[str, Item8K_801], pd.DataFrame]):
+        """Insert Item8K_801 items into the database.
         
         Args:
-            items: Either a dictionary of item_number to Simple8KItem_801 or a DataFrame
+            items: Either a dictionary of item_number to Item8K_801 or a DataFrame
         """
         if isinstance(items, pd.DataFrame):
             # Register the DataFrame as a temporary table
@@ -134,7 +135,7 @@ class DuckDBManager:
             
             # Insert into the main table
             self.conn.execute("""
-                INSERT INTO simple8k_items_801 (cik, item_number, ex99_urls, url_8k, filing_date, parsed_text, event_type, sentiment, event_summary, key_takeaway, probable_price_move, price_move_reason, is_financially_material, is_operational_impact, is_related_to_prior, is_recent_event, unexpected_timing, mentioned_companies, mentioned_tickers, keywords, strategic_signal, priority_shift_detected)
+                INSERT INTO items_8k_801 (cik, item_number, ex99_urls, url_8k, filing_date, parsed_text, event_type, sentiment, event_summary, key_takeaway, probable_price_move, price_move_reason, is_financially_material, is_operational_impact, is_related_to_prior, is_recent_event, unexpected_timing, mentioned_companies, mentioned_tickers, keywords, strategic_signal, priority_shift_detected)
                 SELECT cik, item_number, ex99_urls, url_8k, filing_date, parsed_text, event_type, sentiment, event_summary, key_takeaway, probable_price_move, price_move_reason, is_financially_material, is_operational_impact, is_related_to_prior, is_recent_event, unexpected_timing, mentioned_companies, mentioned_tickers, keywords, strategic_signal, priority_shift_detected
                 FROM temp_df
             """)
@@ -146,55 +147,55 @@ class DuckDBManager:
         
     
         
-    def get_all_simple8k_items(self) -> pd.DataFrame:
-        """Get all Simple8KItem_801 records from the database.
+    def get_all_8k_items(self) -> pd.DataFrame:
+        """Get all Item8K_801 records from the database.
         
         Returns:
-            DataFrame containing all Simple8KItem_801 records
+            DataFrame containing all Item8K_801 records
         """
         return self.conn.execute("""
-            SELECT * FROM simple8k_items_801
+            SELECT * FROM items_8k_801
         """).df()
         
-    def get_simple8k_items_by_cik(self, cik: str) -> pd.DataFrame:
-        """Get Simple8KItem_801 records for a specific CIK.
+    def get_8k_items_by_cik(self, cik: str) -> pd.DataFrame:
+        """Get Item8K_801 records for a specific CIK.
         
         Args:
             cik: CIK of the company
             
         Returns:
-            DataFrame containing Simple8KItem_801 records for the CIK
+            DataFrame containing Item8K_801 records for the CIK
         """
         return self.conn.execute("""
-            SELECT * FROM simple8k_items_801 
+            SELECT * FROM items_8k_801 
             WHERE cik = ?
         """, (cik,)).df()
         
-    def get_simple8k_items_by_date(self, filing_date: str) -> pd.DataFrame:
-        """Get Simple8KItem_801 records for a specific filing date.
+    def get_8k_items_by_date(self, filing_date: str) -> pd.DataFrame:
+        """Get Item8K_801 records for a specific filing date.
         
         Args:
             filing_date: Filing date of the 8-K
             
         Returns:
-            DataFrame containing Simple8KItem_801 records for the filing date
+            DataFrame containing Item8K_801 records for the filing date
         """
         return self.conn.execute("""
-            SELECT * FROM simple8k_items_801 
+            SELECT * FROM items_8k_801 
             WHERE filing_date = ?
         """, (filing_date,)).df()
         
-    def get_simple8k_items_by_event_type(self, event_type: str) -> pd.DataFrame:
-        """Get Simple8KItem_801 records for a specific event type.
+    def get_8k_items_by_event_type(self, event_type: str) -> pd.DataFrame:
+        """Get Item8K_801 records for a specific event type.
         
         Args:
             event_type: Type of event to filter by
             
         Returns:
-            DataFrame containing Simple8KItem_801 records for the event type
+            DataFrame containing Item8K_801 records for the event type
         """
         return self.conn.execute("""
-            SELECT * FROM simple8k_items_801 
+            SELECT * FROM items_8k_801 
             WHERE event_type = ?
         """, (event_type,)).df()
         
@@ -244,7 +245,7 @@ class DuckDBManager:
         """
         return self.conn.execute("""
             SELECT DISTINCT cik, filing_date, item_number, event_type, event_summary, sentiment
-            FROM simple8k_items_801
+            FROM items_8k_801
             ORDER BY filing_date DESC, cik
         """).df()
 

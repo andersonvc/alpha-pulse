@@ -1,15 +1,10 @@
 """Agent for parsing 8-K filing text and separating items."""
-import json
-import logging
-from typing import Dict
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import AIMessage
 
-from alpha_pulse.types.simple8k import SimpleState8K, Simple8KItem_801
-from alpha_pulse.agents.base_agent import BaseAgent
-
+from alpha_pulse.types.edgar8k import Item8K_801
+from alpha_pulse.types.edgar8k import State8K
 
 SYSTEM_PROMPT = """
 You are an expert in U.S. SEC financial disclosures.
@@ -56,7 +51,7 @@ Guidelines:
 """
 
 
-class Simple8KAnalyzer_801:
+class Agent8KAnalyzer_801:
     """Agent for parsing 8-K filing text and extracting item sections.
     
     This agent processes each filing entry in the state and extracts the
@@ -65,20 +60,20 @@ class Simple8KAnalyzer_801:
     
     def __init__(self):
         """Initialize the parser with model and prompt."""
-        self.model = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Simple8KItem_801)
+        self.model = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Item8K_801)
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", SYSTEM_PROMPT),
             ("human", "Parsed text: {parsed_text}")
         ])
 
     
-    async def __call__(self, state: SimpleState8K) -> SimpleState8K:
+    async def __call__(self, state: State8K) -> State8K:
         """Process the state using the agent."""
         chain = self.prompt | self.model
 
         if '8.01' in state.parsed_items:
             parsed_text = state.parsed_items["8.01"].parsed_text
-            result: Simple8KItem_801 = await chain.ainvoke({
+            result: Item8K_801 = await chain.ainvoke({
                 "parsed_text": parsed_text
             })
             result.item_number = "8.01"
