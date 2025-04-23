@@ -13,8 +13,11 @@ import aiohttp
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
-from alpha_pulse.tools.edgar_utils import parse_atom_latest_filings_feed, filter_8k_feed_by_items, extract_8k_url_from_base_url
-
+from alpha_pulse.tools.edgar_utils import (
+    parse_atom_latest_filings_feed,
+    filter_8k_feed_by_items,
+    extract_8k_url_from_base_url
+)
 from alpha_pulse.types.edgar8k import ExtractedUrls
 
 # Constants
@@ -43,7 +46,7 @@ class RateLimiter:
                 cls._instance.request_times = []
         return cls._instance
     
-    async def wait(self):
+    async def wait(self) -> None:
         """Wait if necessary to respect rate limits."""
         now = time.time()
         
@@ -52,7 +55,6 @@ class RateLimiter:
         
         # Check burst limit
         if len(self.request_times) >= SEC_BURST_LIMIT:
-            # Wait until the oldest request falls outside the window
             wait_time = self.request_times[0] + SEC_BURST_WINDOW - now
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
@@ -95,7 +97,7 @@ class SECClient:
     _burst_window: float = 1.0  # 1 second window
     _max_burst: int = 8  # Maximum requests in burst window
 
-    async def _wait_for_rate_limit(self):
+    async def _wait_for_rate_limit(self) -> None:
         """Wait if necessary to respect rate limits."""
         now = time.time()
         
@@ -104,7 +106,6 @@ class SECClient:
         
         # Check burst limit
         if len(self._request_times) >= self._max_burst:
-            # Wait until the oldest request falls outside the window
             wait_time = self._request_times[0] + self._burst_window - now
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
@@ -176,38 +177,58 @@ class EdgarAPI:
         """Initialize the EdgarAPI with a SECClient instance."""
         self.client = SECClient()
     
-    async def get_latest_filings(self, limit: int = 40, filing_type: str = '8-K') -> List[str]:
+    async def get_latest_filings(self, limit: int = 40, filing_type: str = '8-K') -> pd.DataFrame:
         """Retrieves the latest filings from the SEC.
         
         Args:
             limit: Maximum number of filings to return (default: 40)
             filing_type: Type of filing to retrieve (default: '8-K')
+            
+        Returns:
+            DataFrame containing filing information
         """
-        headers = {
-            'User-Agent': os.getenv("USER_AGENT"),
-            'Accept-Encoding': 'gzip, deflate',
-        }
         url = f"{self.client.base_url}/cgi-bin/browse-edgar?company=&CIK=&type={filing_type}&owner=include&count={limit}&action=getcurrent&output=atom"
-        resp: str = await self.client._make_request(url, headers)
+        resp = await self.client._make_request(url, self.client.headers)
         df = parse_atom_latest_filings_feed(resp)
         filtered_df = filter_8k_feed_by_items(df)
 
+        # Get URLs and text content
+        extracted_urls = await asyncio.gather(*[
+            self._get_8k_urls(url) for url in filtered_df['base_url']
+        ])
+        filtered_df[['url_8k', 'url_ex99']] = pd.DataFrame([
+            url.model_dump() for url in extracted_urls
+        ])[['url_8k', 'url_ex99']]
 
-        async def get_8k_urls(x)->ExtractedUrls:
-            html = await self.client._make_request(x, headers)
-            return extract_8k_url_from_base_url(html)
-        
-        async def get_url_text(url:str)->str:
-            html = await self.client._make_request(url, headers)
-            soup = BeautifulSoup(html, 'html.parser')
-            return soup.get_text()
-        
-        extracted_urls:List[ExtractedUrls] = await asyncio.gather(*[get_8k_urls(x) for x in filtered_df['base_url']])
-        filtered_df[['url_8k', 'url_ex99']] = pd.DataFrame([url.model_dump() for url in extracted_urls])[['url_8k', 'url_ex99']]
-
-        filtered_df['url_text'] = await asyncio.gather(*[get_url_text(x) for x in filtered_df['url_8k']])
+        filtered_df['url_text'] = await asyncio.gather(*[
+            self._get_url_text(url) for url in filtered_df['url_8k']
+        ])
         return filtered_df
 
+    async def _get_8k_urls(self, base_url: str) -> ExtractedUrls:
+        """Get 8-K URLs from base URL.
+        
+        Args:
+            base_url: Base URL to extract from
+            
+        Returns:
+            ExtractedUrls object containing URLs
+        """
+        html = await self.client._make_request(base_url, self.client.headers)
+        return extract_8k_url_from_base_url(html)
+
+    async def _get_url_text(self, url: str) -> str:
+        """Get text content from URL.
+        
+        Args:
+            url: URL to get text from
+            
+        Returns:
+            str: Text content
+        """
+        html = await self.client._make_request(url, self.client.headers)
+        soup = BeautifulSoup(html, 'html.parser')
+        return soup.get_text()
 
     async def get_cik_from_ticker(self, ticker: str) -> Optional[str]:
         """Retrieves the Central Index Key (CIK) for a given stock ticker symbol.
@@ -228,7 +249,6 @@ class EdgarAPI:
                 return cik
         return None
 
-
     async def _get_filing_urls_from_root_url(self, root_url: str) -> Tuple[str, List[str]]:
         """
         When provided a root url, this method will retrieve the url link to the
@@ -246,12 +266,7 @@ class EdgarAPI:
         """
         logging.info(f"Extracting 8-K text link from {root_url}")
 
-        headers = {
-            'User-Agent': os.getenv("USER_AGENT"),
-            'Accept-Encoding': 'gzip, deflate',
-        }
-
-        html = await self.client._make_request(root_url, headers)
+        html = await self.client._make_request(root_url, self.client.headers)
         soup = BeautifulSoup(html, 'html.parser')
 
         # Find all table rows in the document
