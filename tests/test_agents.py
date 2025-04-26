@@ -8,6 +8,7 @@ import pandas as pd
 from alpha_pulse.agents.edgar.agent_8k_parser import Agent8KParser
 from alpha_pulse.agents.edgar.agent_8k_801_analyzer import Agent8KAnalyzer_801
 from alpha_pulse.types.edgar8k import State8K, Item8K_801
+from tests.conftest import mock_llm_chain
 
 @pytest.fixture
 def sample_8k_text():
@@ -67,17 +68,12 @@ class TestAgent8KParser:
     @patch("alpha_pulse.agents.edgar.agent_8k_parser.ChatPromptTemplate")
     @patch("alpha_pulse.agents.edgar.agent_8k_parser.ChatOpenAI")
     async def test_call(self, mock_openai_class, mock_prompt_class, sample_state):
-        # Return a valid JSON string in the response
-        mock_response = MagicMock()
-        mock_response.content = json.dumps({
-            "8.01": {"parsed_text": "Parsed text content"}
+        # Use the helper to get a mock chain that returns JSON content
+        mock_chain = mock_llm_chain({
+            "8.01": "Parsed text content"
         })
 
-        # Chain mock with ainvoke()
-        mock_chain = AsyncMock()
-        mock_chain.ainvoke.return_value = mock_response
-
-        # Use MagicMock to support | operator
+        # Setup prompt | model chain
         mock_prompt = MagicMock()
         mock_prompt.__or__.return_value = mock_chain
         mock_prompt_class.from_messages.return_value = mock_prompt
@@ -85,14 +81,14 @@ class TestAgent8KParser:
         mock_model = MagicMock()
         mock_openai_class.return_value.with_structured_output.return_value = mock_model
 
-        # Instantiate and run agent
+        # Run the agent
         agent = Agent8KParser()
         result = await agent(sample_state)
 
-        # Assertions
+        # Assert the expected output
         assert isinstance(result, State8K)
         assert "8.01" in result.parsed_items
-        assert result.parsed_items["8.01"]["parsed_text"] == "Parsed text content"
+        assert result.parsed_items["8.01"].parsed_text == "Parsed text content"
 
     
     @pytest.mark.asyncio

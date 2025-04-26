@@ -9,8 +9,10 @@ from IPython.display import Image
 
 from alpha_pulse.agents.edgar.agent_8k_parser import Agent8KParser
 from alpha_pulse.agents.edgar.agent_8k_801_analyzer import Agent8KAnalyzer_801
+from alpha_pulse.agents.edgar.agent_8k_502_analyzer import Agent8KAnalyzer_502
 from alpha_pulse.types.edgar8k import State8K
 from alpha_pulse.types.edgar8k.item_8k_801 import Item8K_801
+from alpha_pulse.types.edgar8k.item_8k_502 import Item8K_502
 
 def compile_workflow(draw_mermaid: bool = False, output_path: Optional[Path] = None) -> StateGraph:
     """Compile the 8-K processing workflow.
@@ -28,11 +30,26 @@ def compile_workflow(draw_mermaid: bool = False, output_path: Optional[Path] = N
     # Add nodes
     workflow.add_node("8k_parser", Agent8KParser())
     workflow.add_node("8k_801_analyzer", Agent8KAnalyzer_801())
+    workflow.add_node("8k_502_analyzer", Agent8KAnalyzer_502())
     
     # Add edges
     workflow.add_edge(START, "8k_parser")
-    workflow.add_edge("8k_parser", "8k_801_analyzer")
+    
+    # Add conditional edges based on item type
+    def route_by_item_type(state: State8K) -> str:
+        if state.items == "8.01":
+            return "8k_801_analyzer"
+        elif state.items == "5.02":
+            return "8k_502_analyzer"
+        return END
+    
+    workflow.add_conditional_edges(
+        "8k_parser",
+        route_by_item_type
+    )
+    
     workflow.add_edge("8k_801_analyzer", END)
+    workflow.add_edge("8k_502_analyzer", END)
     
     # Set entry point
     workflow.set_entry_point("8k_parser")

@@ -5,8 +5,9 @@ import pandas as pd
 from pathlib import Path
 from typing import Optional, Union, List, Dict, Any, Tuple
 from dataclasses import dataclass
+import logging
 
-from alpha_pulse.types.edgar8k import Item8K_801
+from alpha_pulse.types.edgar8k import Item8K_801, Item8K_502
 
 @dataclass
 class TableInfo:
@@ -22,6 +23,12 @@ class DuckDBManager:
     ITEMS_8K_801 = TableInfo(
         name="items_8k_801",
         model=Item8K_801,
+        primary_key=["cik", "filing_date", "item_number"]
+    )
+    
+    ITEMS_8K_502 = TableInfo(
+        name="items_8k_502",
+        model=Item8K_502,
         primary_key=["cik", "filing_date", "item_number"]
     )
     
@@ -47,42 +54,107 @@ class DuckDBManager:
         return list(model.model_fields.keys())
 
     def create_8k_tables(self) -> None:
-        """Create tables for storing State8K records with Item8K_801 items."""
-        # Get all fields from the model
-        fields = self._get_model_fields(self.ITEMS_8K_801.model)
-        
-        # Create column definitions
-        columns = []
-        for field in fields:
-            columns.append(f"{field} TEXT")
-        
-        # Create table with composite primary key
-        self.conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {self.ITEMS_8K_801.name} (
-                {', '.join(columns)},
-                PRIMARY KEY ({', '.join(self.ITEMS_8K_801.primary_key)})
-            )
-        """)
+        """Create tables for storing State8K records with Item8K items."""
+        # Create tables for each item type
+        for table_info in [self.ITEMS_8K_801, self.ITEMS_8K_502]:
+            # Get all fields from the model
+            fields = self._get_model_fields(table_info.model)
+            
+            # Create column definitions
+            columns = []
+            for field in fields:
+                columns.append(f"{field} TEXT")
+            
+            # Create table with composite primary key
+            self.conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table_info.name} (
+                    {', '.join(columns)},
+                    PRIMARY KEY ({', '.join(table_info.primary_key)})
+                )
+            """)
 
-    def insert_8k_items(self, items: Union[Dict[str, Item8K_801], pd.DataFrame]) -> None:
-        """Insert Item8K_801 items into the database.
+    def insert_8k_items(self, items: Union[Dict[str, Any], pd.DataFrame], item_type: str = "801") -> None:
+        """Insert 8-K items into the database.
         
         Args:
-            items: Either a dictionary of item_number to Item8K_801 or a DataFrame
+            items: Either a dictionary of item_number to Item8K or a DataFrame
+            item_type: Type of 8-K item ("801" or "502")
         """
         if not isinstance(items, pd.DataFrame):
             raise ValueError("items must be a DataFrame")
             
+        # Select the appropriate table info
+        table_info = self.ITEMS_8K_801 if item_type == "801" else self.ITEMS_8K_502
+            
+        # Get model fields and their types
+        fields = self._get_model_fields(table_info.model)
+        field_types = {}
+        for field_name, field in table_info.model.model_fields.items():
+            field_types[field_name] = field.annotation
+            
+        # Debug logging before processing
+        logging.info("Original DataFrame:")
+        logging.info(items.info())
+        logging.info("Original DataFrame head:")
+        logging.info(items.head())
+            
+        # Ensure DataFrame has all required columns in the correct order
+        for field in fields:
+            if field not in items.columns:
+                if field == 'individuals':
+                    items[field] = '[]'
+                else:
+                    items[field] = ''
+            else:
+                # Ensure required fields are not empty
+                if field in ['cik', 'filing_date', 'item_number']:
+                    items[field] = items[field].fillna('')
+                    if items[field].empty or items[field].isna().all():
+                        raise ValueError(f"Required field {field} is empty or contains only NULL values")
+                    
+        # Reorder columns to match table structure
+        items = items[fields]
+            
+        # Handle individuals field if present
+        if 'individuals' in items.columns:
+            items['individuals'] = items['individuals'].apply(lambda x: '[]' if pd.isna(x) or x == '' else x)
+            
+        # Debug logging after processing
+        logging.info("Processed DataFrame:")
+        logging.info(items.info())
+        logging.info("Processed DataFrame head:")
+        logging.info(items.head())
+        logging.info("Required fields check:")
+        for field in ['cik', 'filing_date', 'item_number']:
+            logging.info(f"{field} values: {items[field].tolist()}")
+            
         # Register the DataFrame as a temporary table
         self.conn.register('temp_df', items)
         
+        # Create column definitions with proper type casting
+        columns = []
+        for field in fields:
+            if field_types[field] == int:
+                columns.append(f"CAST(NULLIF({field}, '') AS INTEGER) as {field}")
+            elif field_types[field] == bool:
+                columns.append(f"CAST(NULLIF({field}, '') AS BOOLEAN) as {field}")
+            else:
+                columns.append(field)
+        
+        # Debug logging
+        logging.info(f"Table name: {table_info.name}")
+        logging.info(f"Fields: {fields}")
+        logging.info(f"Columns: {columns}")
+        
         # Insert into the main table
-        columns = ", ".join(self._get_model_fields(self.ITEMS_8K_801.model))
-        self.conn.execute(f"""
-            INSERT INTO {self.ITEMS_8K_801.name} ({columns})
-            SELECT {columns}
+        query = f"""
+            INSERT INTO {table_info.name} ({', '.join(fields)})
+            SELECT {', '.join(columns)}
             FROM temp_df
-        """)
+        """
+        logging.info(f"SQL Query: {query}")
+        
+        self.conn.execute(query)
         
         # Unregister the temporary table
         self.conn.unregister('temp_df')
@@ -164,17 +236,24 @@ class DuckDBManager:
         
         return True, count
 
-    def get_all_filings(self) -> pd.DataFrame:
+    def get_all_filings(self) -> Dict[str, pd.DataFrame]:
         """Get all filings from the database.
         
         Returns:
             DataFrame containing all filings with their parsed items
         """
-        return self.conn.execute(f"""
+        recs_801 = self.conn.execute(f"""
             SELECT DISTINCT cik, filing_date, item_number, event_type, event_summary, sentiment
             FROM {self.ITEMS_8K_801.name}
             ORDER BY filing_date DESC, cik
         """).df()
+        recs_502 = self.conn.execute(f"""
+            SELECT DISTINCT *
+            FROM {self.ITEMS_8K_502.name}
+            ORDER BY filing_date DESC, cik
+        """).df()
+        return {'801': recs_801, '502': recs_502}
+
 
     def close(self) -> None:
         """Close the database connection."""
