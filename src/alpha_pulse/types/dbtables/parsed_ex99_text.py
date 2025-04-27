@@ -4,20 +4,20 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional
 from datetime import datetime, date
 
-class Parsed8KText(BaseModel):
+class ParsedEX99Text(BaseModel):
     """
-    Extracted / formatted text from html of 8-K filing. Items are stored separately in this table.
+    Extracted / formatted text from html of EX-99 filing. Items are stored separately in this table.
     """
     
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
     cik: str = Field(..., description="The company's CIK identifier")
-    item_number: str = Field(..., description="The item number of the 8-K filing")
+    ex99_id: str = Field(..., description="The ID of the EX-99 filing")
+    ex99_url: str = Field(..., description="The URL of the EX-99 filing")
     base_url: str = Field(..., description="The base URL of the filing")
-    item_text: str = Field(..., description="The extracted / formatted text of the item")
-    ts: datetime = Field(..., description="Timestamp of exactly when the item was extracted")
+    ex99_text: str = Field(..., description="The extracted / formatted text of the ex99 filing")
+    ts: datetime = Field(..., description="Timestamp of exactly when the ex99 was extracted")
     filing_date: date = Field(..., description="Date of the 8-K filing")
-    urls_ex99: Optional[str] = Field("", description="The URLs of the EX-99 filings")
 
     @field_validator('ts')
     def must_be_timezone_aware(cls, v):

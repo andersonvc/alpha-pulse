@@ -1,3 +1,4 @@
+'''
 """SEC EDGAR API client for retrieving and parsing company filings."""
 
 import os
@@ -163,3 +164,4 @@ class EdgarAPI:
         soup = BeautifulSoup(html, 'html.parser')
         document_text = soup.get_text()
         return document_text
+'''

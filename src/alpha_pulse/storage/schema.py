@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 from alpha_pulse.types.dbtables.filing_entry import FilingRSSFeedEntry
 from alpha_pulse.types.dbtables.parsed_8k_text import Parsed8KText
+from alpha_pulse.types.dbtables.parsed_ex99_text import ParsedEX99Text
+from alpha_pulse.types.dbtables.analyzed_ex99_text import AnalyzedEX99Text
 from alpha_pulse.storage.db_utils import generate_create_statement
 
 @dataclass
@@ -48,8 +50,23 @@ PARSED_8K_TEXT = TableSchema(
     primary_key=['cik','filing_date', 'item_number'],
 )
 
+PARSED_EX99_TEXT = TableSchema(
+    name="parsed_ex99_text",
+    model=ParsedEX99Text,
+    create_statement=generate_create_statement(ParsedEX99Text, "parsed_ex99_text", ['cik', 'filing_date', 'ex99_id']),
+    primary_key=['cik','filing_date', 'ex99_id'],
+)
+
+ANALYZED_EX99_TEXT = TableSchema(
+    name="analyzed_ex99_text",
+    model=AnalyzedEX99Text,
+    create_statement=generate_create_statement(AnalyzedEX99Text, "analyzed_ex99_text", ['cik', 'filing_date', 'ex99_id']),
+    primary_key=['cik','filing_date', 'ex99_id'],
+)
 # List of all tables
 TABLES = {
     'filed_8k_listing':FILED_8K_LISTING,
     'parsed_8k_text':PARSED_8K_TEXT,
+    'parsed_ex99_text':PARSED_EX99_TEXT,
+    'analyzed_ex99_text':ANALYZED_EX99_TEXT
 }

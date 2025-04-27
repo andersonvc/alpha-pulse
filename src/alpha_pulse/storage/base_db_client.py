@@ -5,21 +5,21 @@ from typing import Any, List, Type, Dict
 from pydantic import BaseModel
 from alpha_pulse.storage.db_utils import generate_create_statement
 from alpha_pulse.storage.schema import TABLES
-
-DB_PATH = Path(__file__).parent.parent.parent.parent / 'data' / 'alpha_pulse.duckdb'
-
+import os
 
 class DuckDBClient:
     def __init__(self, read_only: bool = False, retries: int = 3, retry_delay: float = 1.0):
-        self.db_path = DB_PATH
+        self.db_path = os.getenv('DUCKDB_PATH')
         self.read_only = read_only
         self.retries = retries
         self.retry_delay = retry_delay
         self.conn = None
 
     def _ensure_directory(self):
-        if isinstance(self.db_path, Path) and self.db_path != ':memory:':
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Ensuring directory for {self.db_path}")
+        if self.db_path:
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+
 
     def connect(self):
         if self.conn is not None:
@@ -30,7 +30,7 @@ class DuckDBClient:
         while attempt <= self.retries:
             try:
                 self.conn = duckdb.connect(
-                    database=str(self.db_path),
+                    database=self.db_path,
                     read_only=self.read_only
                 )
                 print(f"Connected to DuckDB at {self.db_path} (read_only={self.read_only})")

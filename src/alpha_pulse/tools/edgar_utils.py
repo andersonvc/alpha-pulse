@@ -1,3 +1,4 @@
+'''
 """Utility functions for SEC EDGAR API interactions."""
 
 import pandas as pd
@@ -141,3 +142,4 @@ def parse_atom_latest_filings_feed(response: str) -> pd.DataFrame:
         ))
     
     return pd.DataFrame([vars(entry) for entry in parsed_data])
+'''

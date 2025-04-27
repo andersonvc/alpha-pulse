@@ -18,16 +18,19 @@ def temp_db():
     db_path = os.path.join(temp_dir, "test.db")
     
     try:
-        yield db_path
+        yield str(db_path)
     finally:
         # Cleanup
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
 
 @pytest.fixture
-def db_manager(temp_db):
+def db_manager(temp_db, monkeypatch):
     """Create a DuckDBManager instance with a temporary database."""
-    manager = DuckDBManager(db_path=temp_db)
+    # Override DUCKDB_PATH environment variable
+    monkeypatch.setenv('DUCKDB_PATH', temp_db)
+    
+    manager = DuckDBManager()
     try:
         yield manager
     finally:

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Any
 import aiohttp
 from aiohttp import ClientError
-
+import fitz
 from alpha_pulse.tools.edgar.rate_limiter import RateLimiter
 
 # Constants
@@ -106,4 +106,43 @@ class SECClient:
             raise
         except ValueError as e:
             logging.error(f"Invalid JSON response: {str(e)}")
+            raise
+
+    async def _make_pdf_request(
+        self, 
+        url: str, 
+        headers: Optional[Dict[str, str]] = None,
+        raise_for_status: bool = True
+    ) -> str:
+        """Make an async request to the SEC API with proper headers and rate limiting.
+        
+        Args:
+            url: URL to request
+            headers: Optional custom headers
+            raise_for_status: Whether to raise an exception for non-200 status codes
+            
+        Returns:
+            str: Response text from the SEC API
+            
+        Raises:
+            ClientError: If the request fails
+            ValueError: If the response status code indicates an error
+        """
+        logging.info(f"Making request to {url}")
+        await self._rate_limiter.wait()
+        
+        headers = headers or self.headers
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    if raise_for_status:
+                        response.raise_for_status()
+                    pdf_bytes = await response.content.read()
+                    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    text = ""
+                    for page in doc:
+                        text += page.get_text()
+                    return text
+        except ClientError as e:
+            logging.error(f"Request failed: {str(e)}")
             raise

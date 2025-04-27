@@ -69,7 +69,7 @@ async def process_new_filings(limit: int = 40) -> None:
     df = df[df['filtered_items'].isin(['5.02','8.01'])]
     
     # Process each filing
-    async with DuckDBManager(db_path="data/alpha_pulse.db") as db_manager:
+    async with DuckDBManager() as db_manager:
         for _, row in df.iterrows():
             # Create State8K object
             state = State8K(
@@ -98,7 +98,7 @@ async def process_new_filings(limit: int = 40) -> None:
 
 def print_all_filings() -> None:
     """Print all filings from the database."""
-    with DuckDBManager(db_path="data/alpha_pulse.db") as db_manager:
+    with DuckDBManager() as db_manager:
         df = db_manager.get_all_filings()
         print(df)
 

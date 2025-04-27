@@ -5,7 +5,8 @@ from bs4 import BeautifulSoup
 import re
 from typing import Optional, List
 from dataclasses import dataclass
-import datetime
+from typing import Dict
+from html import unescape
 
 from alpha_pulse.types.edgar8k import ExtractedUrls
 from alpha_pulse.types.dbtables.filing_entry import FilingRSSFeedEntry
@@ -182,11 +183,7 @@ def extract_8k_url_from_base_url(response: str) -> tuple[str, str]:
     urls_ex99 = ','.join(urls_ex99)
 
     return (url_8k, urls_ex99)
-    
-import re
-from typing import Dict
-from html import unescape
-from bs4 import BeautifulSoup
+
 
 def clean_text(text: str) -> str:
     """Clean up strange characters, whitespace, and HTML artifacts."""
@@ -274,3 +271,64 @@ def clean_and_extract_normalized_sections(raw_text: str) -> Dict[str, str]:
             sections[normalized_item] = section_text
 
     return sections
+
+def parse_document_string(doc_string):
+    # Find all <DOCUMENT>...</DOCUMENT> blocks
+    document_blocks = re.findall(r'<DOCUMENT>(.*?)</DOCUMENT>', doc_string, re.DOTALL | re.IGNORECASE)
+
+    parsed_documents = []
+
+    for block in document_blocks:
+        doc_info = {}
+
+        # Extract metadata
+        fields = ['TYPE', 'SEQUENCE', 'FILENAME', 'DESCRIPTION']
+        for field in fields:
+            match = re.search(rf'<{field}>(.*)', block)
+            if match:
+                doc_info[field.lower()] = match.group(1).strip()
+            else:
+                doc_info[field.lower()] = None
+
+        # Extract <TEXT> content
+        text_match = re.search(r'<TEXT>(.*)', block, re.DOTALL | re.IGNORECASE)
+        if text_match:
+            raw_text = text_match.group(1).strip()
+
+            # Try to extract <BODY> if it's HTML
+            soup = BeautifulSoup(raw_text, 'html.parser')
+
+            body = soup.find('body')
+            if body:
+                # Extract text from HTML body
+                cleaned_text = body.get_text(separator='\n', strip=True)
+            else:
+                cleaned_text = soup.get_text(separator='\n', strip=True)
+
+            # Unescape HTML entities like &ldquo;
+            cleaned_text = unescape(cleaned_text)
+
+            doc_info['text'] = cleaned_text
+        else:
+            doc_info['text'] = None
+
+        parsed_documents.append(doc_info)
+
+    return clean_text('\n'.join([doc['text'] for doc in parsed_documents])).strip()
+
+
+def extract_exhibit_number(url: str) -> Optional[str]:
+    patterns = [
+        r"ex\d+-(\d+)",
+        r"ex99+(\d+)",
+        r"ex-99(\d+)",
+        r"exhibit99(\d+)"
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    
+    print(f"No match found for {url}")
+    return None

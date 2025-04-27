@@ -1,5 +1,4 @@
-
-
+'''
     async def get_latest_filings(self, limit: int = 40, filing_type: str = '8-K') -> pd.DataFrame:
         """Retrieves the latest filings from the SEC.
         
@@ -27,3 +26,4 @@
             self._get_url_text(url) for url in filtered_df['url_8k']
         ])
         return filtered_df
+'''

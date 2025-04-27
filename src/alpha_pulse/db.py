@@ -2,12 +2,11 @@
 
 import duckdb
 import pandas as pd
-from pathlib import Path
 from typing import Optional, Union, List, Dict, Any, Tuple
 from dataclasses import dataclass
 import logging
 import json
-
+import os
 from alpha_pulse.types.edgar8k import Item8K_801, Item8K_502
 
 @dataclass
@@ -33,13 +32,9 @@ class DuckDBManager:
         primary_key=["cik", "filing_date", "item_number"]
     )
     
-    def __init__(self, db_path: Optional[Union[str, Path]] = None):
-        """Initialize DuckDB connection.
-        
-        Args:
-            db_path: Path to the DuckDB database file. If None, uses in-memory database.
-        """
-        self.db_path = db_path
+    def __init__(self):
+        """Initialize DuckDB connection."""
+        self.db_path = os.getenv('DUCKDB_PATH')
         self.conn = None
         self._connect()
         self.create_8k_tables()
@@ -48,7 +43,7 @@ class DuckDBManager:
         """Establish database connection."""
         if self.conn is not None:
             self.conn.close()
-        self.conn = duckdb.connect(str(self.db_path) if self.db_path else ':memory:')
+        self.conn = duckdb.connect(self.db_path)
 
     def _get_model_fields(self, model: type) -> List[str]:
         """Get field names from a Pydantic model.
@@ -341,7 +336,7 @@ class DuckDBManager:
         Returns:
             DuckDB connection
         """
-        return duckdb.connect(str(self.db_path) if self.db_path else ':memory:')
+        return duckdb.connect(self.db_path)
 
     def get_all_filings(self) -> Dict[str, pd.DataFrame]:
         """Get all filings from the database.
@@ -385,4 +380,4 @@ class DuckDBManager:
             self.conn = None
 
 # Initialize default database manager
-db_manager = DuckDBManager(db_path="data/alpha_pulse.db") 
+db_manager = DuckDBManager() 

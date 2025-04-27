@@ -9,8 +9,10 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.11.16",
+    "aiolimiter>=1.2.1",
     "beautifulsoup4>=4.13.3",
     "duckdb>=1.2.2",
+    "duckdb-engine>=0.17.0",
     "graphviz>=0.20.3",
     "ipython>=9.1.0",
     "langchain>=0.3.23",
@@ -24,7 +26,10 @@ dependencies = [
     "prettyprint>=0.1.5",
     "pyarrow>=19.0.1",
     "pydantic>=2.11.3",
+    "pymupdf>=1.25.5",
     "python-dotenv>=1.1.0",
+    "sqlalchemy>=2.0.40",
+    "tenacity>=9.1.2",
 ]
 
 [build-system]
@@ -34,6 +39,7 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "jupyterlab>=4.4.1",
+    "nest-asyncio>=1.6.0",
     "pytest>=8.3.5",
     "pytest-asyncio>=0.26.0",
 ]
