@@ -69,11 +69,17 @@ class Agent8KAnalyzer_502:
             })
             result.item_number = "5.02"
 
+            # Copy all state fields to the result
             result.cik = state.cik
             result.ex99_urls = state.url_ex99
             result.filing_date = state.filing_date
             result.url_8k = state.url_8k
             result.parsed_text = parsed_text
+            
+            # Ensure url_8k is not None
+            if result.url_8k is None:
+                result.url_8k = ""
+                
             state.parsed_items["5.02"] = result
 
         return state
