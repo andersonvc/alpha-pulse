@@ -1,185 +1,193 @@
-"""EDGAR API client for querying/formatting SEC filings. Uses SECClient for rate limiting."""
-
 import asyncio
-from typing import List
-import pandas as pd
 import logging
+from typing import List
+
+import pandas as pd
+
 from alpha_pulse.tools.edgar.sec_client import SECClient
-from alpha_pulse.tools.edgar.utils import parse_atom_latest_filings_feed
-from alpha_pulse.agent_workflows import run_doc_analysis
-from alpha_pulse.storage.edgar_db_client import EdgarDBClient
+from alpha_pulse.tools.edgar.utils import (
+    parse_atom_latest_filings_feed,
+    extract_8k_url_from_base_url,
+    clean_and_extract_normalized_sections,
+    parse_document_string,
+)
 from alpha_pulse.types.dbtables.filing_entry import FilingRSSFeedEntry
-from alpha_pulse.tools.edgar.utils import extract_8k_url_from_base_url, clean_and_extract_normalized_sections, parse_document_string, extract_exhibit_number
 from alpha_pulse.types.dbtables.parsed_8k_text import Parsed8KText
 from alpha_pulse.types.dbtables.parsed_ex99_text import ParsedEX99Text
-from alpha_pulse.types.dbtables.analyzed_ex99_text import DocAnalysis, AnalyzedEX99Text
+from alpha_pulse.types.dbtables.analyzed_ex99_text import AnalyzedEX99Text
+from alpha_pulse.types.dbtables.analyzed_801_text import Analyzed801Text
 from alpha_pulse.types.dbtables.parsed_items import Item502Summary
+from alpha_pulse.agent_workflows import run_doc_analysis
 from alpha_pulse.agent_workflows.parse_8k_502 import run_502_graph
-from alpha_pulse.storage.publishers.publish_parsed_502 import publish_parsed_502
 from alpha_pulse.agent_workflows.item801_analyzer import run_item801_analysis
-from alpha_pulse.types.dbtables.analyzed_801_text import FullAnalysis, Analyzed801Text
+from alpha_pulse.storage.edgar_db_client import EdgarDBClient
+from alpha_pulse.storage.publishers.publish_parsed_502 import publish_parsed_502
 from alpha_pulse.storage.publishers.publish_parsed_801 import publish_parsed_801
+
+
 class EdgarClient:
-    """Client for querying/formatting SEC filings."""
+    """Client for downloading and parsing SEC 8-K filings."""
 
     def __init__(self):
         self.client = SECClient()
-        self.db_handler = EdgarDBClient()
-        self.db_handler._startup_db()
+        self.db = EdgarDBClient()
+        self.db._startup_db()
 
-    async def grab_recent_filings(self, filing_type: str, limit: int = 100, start=0) -> list[dict]:
-        """Get list of 8k filings based on filter criteria."""
-        
-        if start >= 200:
+    async def grab_recent_filings(self, filing_type: str, limit: int = 100, start: int = 0, stop_early: bool=True):
+        """Recursively fetch recent filings of a given type."""
+        print(start)
+        if start >= 1000:
             return
 
-        url = f"{self.client.base_url}/cgi-bin/browse-edgar?company=&CIK=&type={filing_type}&owner=include&start={start}&count={limit}&action=getcurrent&output=atom"
+        url = f"{self.client.base_url}/cgi-bin/browse-edgar?company=&CIK=&type={filing_type}&start={start}&count={limit}&action=getcurrent&output=atom"
+        logging.info(f"Fetching filings from {url}")
+
         resp = await self.client._make_request(url, self.client.headers)
-        recs: List[FilingRSSFeedEntry] = parse_atom_latest_filings_feed(resp)
-        
-        # filter out any records that are already in the database
-        pkeys = [r.base_url for r in recs]
-        new_indices = self.db_handler.filter_out_existing_primary_keys('filed_8k_listing', pkeys)
-        
-        filtered_recs = [rec for rec in recs if rec.base_url in new_indices]
-        if len(filtered_recs) == 0:
-            logging.info(f"No new filings found for {filing_type} at start {start}")
+        filings: List[FilingRSSFeedEntry] = parse_atom_latest_filings_feed(resp)
+
+        # Filter out already processed
+        new_filing_urls = [f.base_url for f in filings]
+        unseen = self.db.filter_out_existing_primary_keys('filed_8k_listing', new_filing_urls)
+        new_filings = [f for f in filings if f.base_url in unseen]
+
+        if not new_filings and stop_early:
+            logging.info(f"No new filings found for {filing_type} starting at {start}")
             return
 
-        # write all recurds in df to db
-        self.db_handler.insert_records('filed_8k_listing', filtered_recs)
+        self.db.insert_records('filed_8k_listing', new_filings)
+        logging.info(f"Inserted {len(new_filings)} new filings.")
 
-        await self.grab_recent_filings(filing_type, limit, start+limit)
-    
+        # Recursive fetch
+        await self.grab_recent_filings(filing_type, limit, start + limit,stop_early)
+
     async def parse_filings(self):
-        """Parse all filings flagged as unprocessed in the database."""
-        recs = self.db_handler.get_unprocessed_filings()
+        """Parse new, unprocessed filings."""
+        filings = self.db.get_unprocessed_filings()
+        filings = filings[:100]
+        if not filings:
+            logging.info("No new filings to parse")
+            return
 
-        async def load_base_url(rec:FilingRSSFeedEntry):
-            html = await self.client._make_request(rec.base_url)
-            url_8k,url_ex99 = extract_8k_url_from_base_url(html)
-            rec.url_8k = url_8k
-            rec.url_ex99 = url_ex99
+        await self._download_filing_texts(filings)
+        parsed_texts = self._parse_8k_sections(filings)
 
-            # get raw text of 8-K
-            raw_8k_text = await self.client._make_request(url_8k)
-            rec.raw_8k_text = raw_8k_text
 
-            await self.db_handler.update_url_8k(rec.base_url, url_8k, url_ex99, raw_8k_text)
-        
-        tasks = [load_base_url(rec) for rec in recs]
-        await asyncio.gather(*tasks)
-        
-        def parse_8k_text(rec:FilingRSSFeedEntry)->List[Parsed8KText]:
-            item_text = clean_and_extract_normalized_sections(rec.raw_8k_text)
-            results = []
-            for item_number, item_text in item_text.items():
-                results.append(Parsed8KText(
-                    cik=rec.cik,
-                    filing_date=rec.filing_date, 
-                    item_number=item_number, 
-                    base_url=rec.base_url,
-                    ts=rec.ts,
-                    item_text=item_text,
-                    urls_ex99=rec.url_ex99
+        await self._analyze_item_sections(parsed_texts)
+        await self._analyze_exhibits(parsed_texts)
+
+        for record in parsed_texts:
+            try:
+                self.db.insert_records('parsed_8k_text', record)
+            except Exception as e:
+                logging.error(f"Error inserting parsed texts: {record.cik} {record.filing_date} {record.item_number}")
+        self.db.update_processed_filings([f.base_url for f in filings])
+
+        await self.parse_filings()
+
+    
+
+    async def _download_filing_texts(self, filings: List[FilingRSSFeedEntry]):
+        """Load 8-K and EX-99 URLs and content."""
+        async def download(filing: FilingRSSFeedEntry):
+            html = await self.client._make_request(filing.base_url)
+            filing.url_8k, filing.url_ex99 = extract_8k_url_from_base_url(html)
+            filing.raw_8k_text = await self.client._make_request(filing.url_8k)
+            await self.db.update_url_8k(filing.base_url, filing.url_8k, filing.url_ex99, filing.raw_8k_text)
+
+        await asyncio.gather(*(download(f) for f in filings))
+
+    def _parse_8k_sections(self, filings: List[FilingRSSFeedEntry]) -> List[Parsed8KText]:
+        """Split filings into Parsed8KText entries."""
+        parsed = []
+        for filing in filings:
+            sections = clean_and_extract_normalized_sections(filing.raw_8k_text)
+            for item, text in sections.items():
+                parsed.append(Parsed8KText(
+                    cik=filing.cik,
+                    filing_date=filing.filing_date,
+                    item_number=item,
+                    base_url=filing.base_url,
+                    ts=filing.ts,
+                    item_text=text,
+                    urls_ex99=filing.url_ex99
                 ))
-            return results
-        
-        text_recs = []
-        for rec in recs:
-            text_recs.extend(parse_8k_text(rec))
-        text_recs = [rec for rec in text_recs if rec is not None]
-        
-        unique_text_recs = {}
-        for rec in text_recs:
-            unique_text_recs[(rec.cik,rec.filing_date,rec.item_number)] = rec
-        unique_text_recs = list(unique_text_recs.values())
+        return parsed
 
-        # Parse 502 text
-        async def parse_502_text(rec:Parsed8KText):
-            print(f"Parsing {rec.item_number} text for {rec.cik} {rec.filing_date} {rec.item_number}")
-            if rec.item_number == '5.02':
+    async def _analyze_item_sections(self, parsed_texts: List[Parsed8KText]):
+        """Analyze items like 5.02 (appointments) and 8.01 (general info)."""
+        async def analyze(text: Parsed8KText):
+            if text.item_number == '5.02':
+                summary = await run_502_graph(text.item_text)
+                await publish_parsed_502(text, summary)
+            elif text.item_number == '8.01':
+                analysis = await run_item801_analysis(text.item_text)
+                await publish_parsed_801(Analyzed801Text(
+                    cik=text.cik,
+                    filing_date=text.filing_date,
+                    item_number=text.item_number,
+                    base_url=text.base_url,
+                    ts=text.ts,
+                    **analysis.model_dump()
+                ))
 
-                text = rec.item_text
-                results:Item502Summary = await run_502_graph(text)
-                await publish_parsed_502(rec, results)
-            elif rec.item_number == '8.01':
-                text = rec.item_text
-                results:FullAnalysis = await run_item801_analysis(text)
-                record:Analyzed801Text = Analyzed801Text(
-                    cik=rec.cik,
-                    filing_date=rec.filing_date,
-                    item_number=rec.item_number,
-                    base_url=rec.base_url,
-                    ts=rec.ts,
-                    **results.model_dump()
-                )
-                await publish_parsed_801(record)
-        
-        tasks = [parse_502_text(rec) for rec in unique_text_recs]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*(analyze(t) for t in parsed_texts))
 
-        
-        unique_ex99_recs = {}
-        for rec in unique_text_recs:
-            if rec.urls_ex99:
-                urls = rec.urls_ex99.split(',')
-                for i,url in enumerate(urls):
-                    if not url.endswith('.htm'):
-                        continue
-                    #ex99_id = extract_exhibit_number(url)
-                    #if not ex99_id:
-                    #    continue
-                    ex99_id = str(i)
+    async def _analyze_exhibits(self, parsed_texts: List[Parsed8KText]):
+        """Analyze EX-99 exhibit texts."""
+        ex99_tasks = []
+        unique_exhibits = {}
 
-                    key = (rec.cik,rec.filing_date,ex99_id)
-                    if key in unique_ex99_recs:
-                        continue
+        for parsed in parsed_texts:
+            if not parsed.urls_ex99:
+                continue
+            urls = parsed.urls_ex99.split(',')
+            for idx, url in enumerate(urls):
+                if not url.endswith('.htm'):
+                    continue
+                key = (parsed.cik, parsed.filing_date, str(idx))
+                if key not in unique_exhibits and not self.db.record_exists('parsed_ex99_text', key):
+                    ex99_tasks.append(self._download_and_parse_exhibit(url, parsed, str(idx)))
 
-                    parsed_ex99_text = await self.client._make_request(url)
-                    parsed_ex99_text = parse_document_string(parsed_ex99_text)
 
-                    unique_ex99_recs[key] = ParsedEX99Text(
-                        cik=rec.cik,
-                        ex99_id=ex99_id,
-                        ex99_url=url,
-                        base_url=rec.base_url,
-                        ex99_text=parsed_ex99_text,
-                        ts=rec.ts,
-                        filing_date=rec.filing_date
-                    )
-        unique_ex99_recs: List[ParsedEX99Text] = list(unique_ex99_recs.values())
+        exhibits = await asyncio.gather(*ex99_tasks)
+        exhibits = list({(e.cik, e.filing_date, e.ex99_id): e for e in exhibits if e}.values())
 
-        # Analyze ex99 text
-        async def analyze_ex99_text(rec:ParsedEX99Text):
-            res_partial:DocAnalysis = await run_doc_analysis(rec.ex99_text)
-            res_full = AnalyzedEX99Text(
-                cik=rec.cik,
-                filing_date=rec.filing_date,
-                ex99_id=rec.ex99_id,
-                ex99_url=rec.ex99_url,
-                ts=rec.ts,
-                **res_partial.model_dump()
-            )
-            return res_full
+        analyzed_exhibits = await asyncio.gather(*(self._analyze_exhibit_text(e) for e in exhibits))
 
-        tasks = [analyze_ex99_text(rec) for rec in unique_ex99_recs]
-        res_fulls = await asyncio.gather(*tasks)
-        res_fulls = [rec for rec in res_fulls if rec is not None]
+        self.db.insert_records('parsed_ex99_text', exhibits)
+        self.db.insert_records('analyzed_ex99_text', analyzed_exhibits)
 
-        self.db_handler.insert_records('parsed_8k_text', unique_text_recs)
-        self.db_handler.insert_records('parsed_ex99_text', unique_ex99_recs)
-        self.db_handler.insert_records('analyzed_ex99_text', res_fulls)
-        
-        # set all records as processed
-        self.db_handler.update_processed_filings([rec.base_url for rec in recs])
+    async def _download_and_parse_exhibit(self, url: str, parsed: Parsed8KText, ex99_id: str) -> ParsedEX99Text:
+        text = await self.client._make_request(url)
+        parsed_text = parse_document_string(text)
+        return ParsedEX99Text(
+            cik=parsed.cik,
+            filing_date=parsed.filing_date,
+            ex99_id=ex99_id,
+            ex99_url=url,
+            base_url=parsed.base_url,
+            ts=parsed.ts,
+            ex99_text=parsed_text
+        )
+
+    async def _analyze_exhibit_text(self, exhibit: ParsedEX99Text) -> AnalyzedEX99Text:
+        analysis = await run_doc_analysis(exhibit.ex99_text)
+        return AnalyzedEX99Text(
+            cik=exhibit.cik,
+            filing_date=exhibit.filing_date,
+            ex99_id=exhibit.ex99_id,
+            ex99_url=exhibit.ex99_url,
+            ts=exhibit.ts,
+            **analysis.model_dump()
+        )
 
 
 async def main():
+    logging.basicConfig(level=logging.INFO)
     client = EdgarClient()
-    await client.grab_recent_filings('8-K')
+    await client.grab_recent_filings('8-K',stop_early=False)
     await client.parse_filings()
 
-if __name__ == '__main__':
-    asyncio.run(main())
 
+if __name__ == "__main__":
+    asyncio.run(main())

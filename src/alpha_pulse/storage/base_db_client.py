@@ -90,6 +90,37 @@ class DuckDBClient:
     def fetchdf(self, query: str, params: tuple = ()):
         self.connect()
         return self.conn.execute(query, params).fetchdf()
+    
+    def record_exists(self, table_name: str, key: tuple|Any) -> bool:
+        """Check if a record exists in the table.
+        
+        Args:
+            table_name: Name of the table to check
+            key: Either a tuple of values for composite key or a single value
+            
+        Returns:
+            bool: True if record exists, False otherwise
+        """
+        table_config = TABLES.get(table_name)
+        if not table_config:
+            raise ValueError(f"Table {table_name} not found in schema")
+            
+        primary_keys = table_config.primary_key
+        
+        if isinstance(key, tuple):
+            if len(key) != len(primary_keys):
+                raise ValueError(f"Number of key values ({len(key)}) does not match number of primary key fields ({len(primary_keys)})")
+            conditions = [f"{pk}=?" for pk in primary_keys]
+            query = f"SELECT COUNT(*) FROM {table_name} WHERE {' AND '.join(conditions)}"
+            params = key
+        else:
+            if len(primary_keys) != 1:
+                raise ValueError(f"Single key value provided but table has {len(primary_keys)} primary key fields")
+            query = f"SELECT COUNT(*) FROM {table_name} WHERE {primary_keys[0]}=?"
+            params = (key,)
+            
+        result = self.execute(query, params).fetchone()
+        return result[0] > 0
 
     def filter_out_existing_primary_keys(self, table_name: str, keys: List[tuple]) -> List[tuple]:
         if not keys:

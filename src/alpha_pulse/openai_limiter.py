@@ -8,7 +8,7 @@ import openai  # Or openai.error.RateLimitError if you want specific error class
 
 # --- Config ---
 REQUESTS_PER_MIN = 60
-TOKENS_PER_MIN = 200_000
+TOKENS_PER_MIN = 160_000
 
 _request_limiter = AsyncLimiter(REQUESTS_PER_MIN, 60)
 _current_tokens = 0
@@ -56,6 +56,6 @@ def get_openai_limiter(text_or_tokens: str | int) -> OpenAIAsyncLimiter:
 retry_openai = tenacity.retry(
     retry=tenacity.retry_if_exception_type((openai.RateLimitError, openai.APIError)),
     wait=tenacity.wait_exponential(multiplier=0.5, max=30),
-    stop=tenacity.stop_after_attempt(5),
+    stop=tenacity.stop_after_attempt(10),
     reraise=True,
 )
