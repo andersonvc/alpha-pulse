@@ -23,7 +23,7 @@ from alpha_pulse.agent_workflows.item801_analyzer import run_item801_analysis
 from alpha_pulse.storage.edgar_db_client import EdgarDBClient
 from alpha_pulse.storage.publishers.publish_parsed_502 import publish_parsed_502
 from alpha_pulse.storage.publishers.publish_parsed_801 import publish_parsed_801
-
+from alpha_pulse.tools.edgar.utils import SharedSingletonSet
 
 class EdgarClient:
     """Client for downloading and parsing SEC 8-K filings."""
@@ -32,6 +32,7 @@ class EdgarClient:
         self.client = SECClient()
         self.db = EdgarDBClient()
         self.db._startup_db()
+        self.exhibit_set = SharedSingletonSet()
 
     async def grab_recent_filings(self, filing_type: str, limit: int = 100, start: int = 0, stop_early: bool=True):
         """Recursively fetch recent filings of a given type."""
@@ -91,7 +92,12 @@ class EdgarClient:
         async def download(filing: FilingRSSFeedEntry):
             html = await self.client._make_request(filing.base_url)
             filing.url_8k, filing.url_ex99 = extract_8k_url_from_base_url(html)
-            filing.raw_8k_text = await self.client._make_request(filing.url_8k)
+            try:
+                filing.raw_8k_text = await self.client._make_request(filing.url_8k)
+            except Exception as e:
+                logging.error(f"Error downloading 8-K text: {filing.url_8k}")
+                logging.error(f"Error: {e}")
+                return
             await self.db.update_url_8k(filing.base_url, filing.url_8k, filing.url_ex99, filing.raw_8k_text)
 
         await asyncio.gather(*(download(f) for f in filings))
@@ -145,7 +151,8 @@ class EdgarClient:
                 if not url.endswith('.htm'):
                     continue
                 key = (parsed.cik, parsed.filing_date, str(idx))
-                if key not in unique_exhibits and not self.db.record_exists('parsed_ex99_text', key):
+                if key not in unique_exhibits and not self.db.record_exists('parsed_ex99_text', key) and url not in self.exhibit_set.get_all():
+                    self.exhibit_set.add(url)
                     ex99_tasks.append(self._download_and_parse_exhibit(url, parsed, str(idx)))
 
 
@@ -153,13 +160,19 @@ class EdgarClient:
         exhibits = list({(e.cik, e.filing_date, e.ex99_id): e for e in exhibits if e}.values())
 
         analyzed_exhibits = await asyncio.gather(*(self._analyze_exhibit_text(e) for e in exhibits))
+        analyzed_exhibits = [e for e in analyzed_exhibits if e is not None]
 
         self.db.insert_records('parsed_ex99_text', exhibits)
         self.db.insert_records('analyzed_ex99_text', analyzed_exhibits)
 
     async def _download_and_parse_exhibit(self, url: str, parsed: Parsed8KText, ex99_id: str) -> ParsedEX99Text:
-        text = await self.client._make_request(url)
-        parsed_text = parse_document_string(text)
+        try:
+            text = await self.client._make_request(url)
+            parsed_text = parse_document_string(text)
+        except Exception as e:
+            logging.error(f"Error downloading and parsing exhibit: {url}")
+            logging.error(f"Error: {e}")
+            return None
         return ParsedEX99Text(
             cik=parsed.cik,
             filing_date=parsed.filing_date,
@@ -171,15 +184,20 @@ class EdgarClient:
         )
 
     async def _analyze_exhibit_text(self, exhibit: ParsedEX99Text) -> AnalyzedEX99Text:
-        analysis = await run_doc_analysis(exhibit.ex99_text)
-        return AnalyzedEX99Text(
-            cik=exhibit.cik,
-            filing_date=exhibit.filing_date,
-            ex99_id=exhibit.ex99_id,
-            ex99_url=exhibit.ex99_url,
-            ts=exhibit.ts,
-            **analysis.model_dump()
-        )
+        try:
+            analysis = await run_doc_analysis(exhibit.ex99_text)
+            return AnalyzedEX99Text(
+                cik=exhibit.cik,
+                filing_date=exhibit.filing_date,
+                ex99_id=exhibit.ex99_id,
+                ex99_url=exhibit.ex99_url,
+                ts=exhibit.ts,
+                **analysis.model_dump()
+            )
+        except Exception as e:
+            logging.error(f"Error analyzing exhibit text: {exhibit.ex99_url}")
+            logging.error(f"Exhibit text: {exhibit.ex99_text}")
+            return None
 
 
 async def main():

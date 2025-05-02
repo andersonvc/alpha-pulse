@@ -7,7 +7,7 @@ import tenacity
 import openai  # Or openai.error.RateLimitError if you want specific error classes
 
 # --- Config ---
-REQUESTS_PER_MIN = 60
+REQUESTS_PER_MIN = 60*60
 TOKENS_PER_MIN = 160_000
 
 _request_limiter = AsyncLimiter(REQUESTS_PER_MIN, 60)

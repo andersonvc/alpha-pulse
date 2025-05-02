@@ -332,3 +332,37 @@ def extract_exhibit_number(url: str) -> Optional[str]:
     
     print(f"No match found for {url}")
     return None
+
+import threading
+
+class SharedSingletonSet:
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(SharedSingletonSet, cls).__new__(cls)
+                cls._instance._init_set()
+        return cls._instance
+
+    def _init_set(self):
+        self._set = set()
+        self._set_lock = threading.Lock()
+
+    def add(self, item):
+        with self._set_lock:
+            self._set.add(item)
+
+    def remove(self, item):
+        with self._set_lock:
+            self._set.remove(item)
+
+    def contains(self, item):
+        with self._set_lock:
+            return item in self._set
+
+    def get_all(self):
+        with self._set_lock:
+            return set(self._set)
+
