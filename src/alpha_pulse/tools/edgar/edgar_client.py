@@ -24,6 +24,9 @@ from alpha_pulse.storage.edgar_db_client import EdgarDBClient
 from alpha_pulse.storage.publishers.publish_parsed_502 import publish_parsed_502
 from alpha_pulse.storage.publishers.publish_parsed_801 import publish_parsed_801
 from alpha_pulse.tools.edgar.utils import SharedSingletonSet
+from alpha_pulse.tools.polygon.company_info import get_ticker_by_cik, get_market_cap_by_ticker, get_sic_by_ticker
+from alpha_pulse.tools.edgar.utils import ALLOWED_8K_ITEMS
+
 
 class EdgarClient:
     """Client for downloading and parsing SEC 8-K filings."""
@@ -50,6 +53,20 @@ class EdgarClient:
         new_filing_urls = [f.base_url for f in filings]
         unseen = self.db.filter_out_existing_primary_keys('filed_8k_listing', new_filing_urls)
         new_filings = [f for f in filings if f.base_url in unseen]
+
+        # For each new filing, get and include the company info
+        for filing in new_filings:
+            filing.ticker = await get_ticker_by_cik(filing.cik)
+            filing.market_cap = await get_market_cap_by_ticker(filing.ticker)
+            filing.sic = await get_sic_by_ticker(filing.ticker)
+        new_filings = [f for f in new_filings if f.market_cap >= 1.0]
+        new_filings = [f for f in new_filings if f.item_list is not None]
+        new_filings2 = []
+        for filing in new_filings:
+            item_list = set(filing.item_list.split(','))
+            if item_list - ALLOWED_8K_ITEMS:
+                new_filings2.append(filing)
+        new_filings = new_filings2
 
         if not new_filings and stop_early:
             logging.info(f"No new filings found for {filing_type} starting at {start}")

@@ -21,6 +21,9 @@ class FilingRSSFeedEntry(BaseModel):
     url_8k: Optional[str] = Field('', description="The URL of the 8-K filing")
     url_ex99: Optional[str] = Field('', description="The URL of the EX-99 filings")
     raw_8k_text: Optional[str] = Field('', description="The raw text of the 8-K filing")
+    ticker: Optional[str] = Field('', description="The ticker of the company")
+    market_cap: Optional[float] = Field(0, description="The market cap of the company")
+    sic: Optional[str] = Field('', description="The SIC code of the company")
 
     @field_validator('ts')
     def must_be_timezone_aware(cls, v):
