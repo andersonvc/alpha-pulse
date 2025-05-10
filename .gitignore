@@ -8,6 +8,8 @@ wheels/
 *.egg-info
 data/
 notebooks/
+outputs/
+.DS_Store
 
 # Virtual environments
 .venv

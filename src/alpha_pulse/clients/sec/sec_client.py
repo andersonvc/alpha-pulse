@@ -7,7 +7,7 @@ from typing import Dict, Optional, Any
 import aiohttp
 from aiohttp import ClientError
 import fitz
-from alpha_pulse.tools.edgar.rate_limiter import RateLimiter
+from alpha_pulse.clients.sec.rate_limiter import RateLimiter
 
 # Constants
 SEC_BASE_URL = "https://www.sec.gov"

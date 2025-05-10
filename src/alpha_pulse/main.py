@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from alpha_pulse.tools.edgar.edgar_client import EdgarClient
+from alpha_pulse.clients.edgar.edgar_client import EdgarClient
 
 async def main():
     logging.basicConfig(level=logging.INFO)

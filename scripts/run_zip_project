@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# Exit on error
+set -e
+
+# Get script directory and project root
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
+
+# Check if uv is available
+if ! command -v uv &> /dev/null; then
+    echo "Error: uv is not installed"
+    echo "Please install uv first: pip install uv"
+    exit 1
+fi
+
+SOURCE_FOLDER="$1"
+ZIP_PATH="$2"
+GITIGNORE_FILE="$3"
+
+# Check if required arguments are provided
+if [ $# -lt 3 ]; then
+    echo "Usage: $0 <source_folder> <zip_path> <gitignore_path>"
+    echo "Example: $0 ./src ./project.zip ./.gitignore"
+    echo "Defaulting to .gitignore file in project root"
+    GITIGNORE_FILE="./.gitignore"
+    SOURCE_FOLDER="./src"
+    ZIP_PATH="./outputs/project.zip"
+    echo "Using default values: $GITIGNORE_FILE, $SOURCE_FOLDER, $ZIP_PATH"
+fi
+
+# Check if source folder exists
+if [ ! -d "$SOURCE_FOLDER" ]; then
+    echo "Error: Source folder '$1' does not exist"
+    exit 1
+fi
+
+# Check if gitignore file exists
+if [ ! -f "$GITIGNORE_FILE" ]; then
+    echo "Error: Gitignore file '$GITIGNORE_FILE' does not exist"
+    exit 1
+fi
+
+# Run the Python script using uv
+uv run python scripts/zip_files_helper.py "$SOURCE_FOLDER" "$ZIP_PATH" "$GITIGNORE_FILE"
+
+# example usage:
+# ./scripts/run_zip_project ./src ./project.zip ./.gitignore
